@@ -1,0 +1,8 @@
+{
+  "python.defaultInterpreterPath": ".venv/Scripts/python.exe",
+  "editor.defaultFormatter": "ms-python.black-formatter",
+  "editor.formatOnSave": true,
+  "[jsonc]": {
+    "editor.defaultFormatter": "vscode.json-language-features"
+  }
+}

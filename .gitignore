@@ -1,0 +1,18 @@
+
+# Environnements virtuels
+.venv/
+venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Données brutes ou temporaires
+data/
+outputs/
+
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/
+
+# Fichiers système
+.DS_Store
