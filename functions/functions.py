@@ -8,6 +8,7 @@ def set_plot_style():
     import plotly.io as pio
     import seaborn as sns
     import matplotlib.pyplot as plt
+    import matplotlib.ticker as mtick
 
     """
     Set the style for matplotlib and plotly plots.
@@ -39,6 +40,28 @@ def set_plot_style():
             "ytick.left": False,
         }
     )
+
+    # Formatter automatique global pour les axes en millions (M) et milliards (B)
+    def auto_format_axes(ax):
+        for axis in [ax.xaxis, ax.yaxis]:
+            axis.set_major_formatter(
+                mtick.FuncFormatter(
+                    lambda x, _: (
+                        f"{x / 1e9:.1f}B"
+                        if x >= 1e9
+                        else (f"{x / 1e6:.1f}M" if x >= 1e6 else f"{x:.0f}")
+                    )
+                )
+            )
+
+    # Application automatique pour chaque nouvelle figure
+    def apply_global_formatting(event):
+        fig = event.canvas.figure
+        for ax in fig.get_axes():
+            auto_format_axes(ax)
+
+    # Connexion de l'événement pour appliquer automatiquement la mise à jour des axes
+    plt.figure().canvas.mpl_connect("draw_event", apply_global_formatting)
 
 
 def import_and_preprocess_data_stock():
