@@ -10,7 +10,7 @@ dependencies = [
     "black",
     "ruff",
     "pandas>=2.2.3",
-    "numpy>=2.2.5",
+    "numpy==1.26.4",
     "yfinance>=0.2.55",
     "fastparquet>=2024.11.0",
     "matplotlib>=3.10.1",
@@ -31,6 +31,7 @@ dependencies = [
     "quarto>=0.1.0",
     "pmdarima>=2.0.4",
     "curl-cffi>=0.10.0",
+    "torch>=2.7.0",
 ]
 
 [tool.black]
