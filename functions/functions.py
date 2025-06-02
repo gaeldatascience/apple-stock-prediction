@@ -25,6 +25,16 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 
+from sklearn.preprocessing import RobustScaler
+from imblearn.over_sampling import SMOTE
+from sklearn.metrics import (
+    accuracy_score,
+    precision_score,
+    recall_score,
+    f1_score,
+    confusion_matrix,
+)
+
 
 # ----------------------------------------------------------------------------
 # Plotting utilities
@@ -183,24 +193,15 @@ def rolling_lstm_pipeline(
     n_features: int = 1,
     device: str = "cpu",
 ) -> pd.DataFrame:
-    """Run a rolling‑window **binary** classification with a PyTorch LSTM.
+    """Run a rolling-window binary classification with a PyTorch LSTM.
 
-    A new dataset is built for every ``window_size`` in ``window_sizes``.  For
-    each, the function walks forward through time, trains an LSTM on the past
-    ``window_size`` days, and evaluates it on the next day.  A weighted
-    *CrossEntropyLoss* handles class imbalance; metrics are computed with
-    the *weighted* average.
-
-    Returns
-    -------
-    pd.DataFrame
-        A table sorted by highest weighted *F1* containing the window size,
-        hyper‑parameters and all evaluation metrics.
+    Pour chaque window_size : on construit X_all, y_all, puis on fait un split chronologique
+    train/test. L’absence de slicing négatif est garantie parce que build_dataset() génère
+    uniquement des séquences valides. On vérifie aussi que X_all n’est pas vide et que
+    y_train contient au moins deux classes.
     """
 
     def build_dataset(df: pd.DataFrame, window_size: int):
-        """Convert a *DataFrame* into 3‑D feature tensors and binary labels."""
-
         X_seqs, y_labels = [], []
         for idx in range(window_size, len(df) - 1):
             seq = df.iloc[idx - window_size : idx].values.reshape(window_size, n_features)
@@ -211,25 +212,21 @@ def rolling_lstm_pipeline(
     results: list[dict] = []
 
     for window_size in window_sizes:
-        # ------------------------------------------------------------------
-        # 1) Build the full dataset for this window length
-        # ------------------------------------------------------------------
         X_all, y_all = build_dataset(features_df, window_size)
         if X_all.shape[0] == 0:
-            continue  # window too large for dataset
+            # La fenêtre est trop grande pour générer des exemples
+            continue
 
-        # ------------------------------------------------------------------
-        # 2) Chronological train/test split
-        # ------------------------------------------------------------------
+        # Split chronologique en train / test
         split_idx = int(len(X_all) * (1 - test_fraction))
         X_train_np, y_train_np = X_all[:split_idx], y_all[:split_idx]
         X_test_np, y_test_np = X_all[split_idx:], y_all[split_idx:]
 
-        # Skip if the training set contains only one class
+        # Si y_train n’a qu’une seule classe, on skippe
         if len(np.unique(y_train_np)) < 2:
             continue
 
-        # Cast to *torch* tensors
+        # On cast en tenseurs PyTorch
         X_train = torch.from_numpy(X_train_np).to(device)
         y_train = torch.from_numpy(y_train_np).long().to(device)
         train_dataset = TensorDataset(X_train, y_train)
@@ -237,9 +234,6 @@ def rolling_lstm_pipeline(
         X_test = torch.from_numpy(X_test_np).to(device)
         y_test = torch.from_numpy(y_test_np).long().to(device)
 
-        # ------------------------------------------------------------------
-        # 3) Hyper‑parameter search
-        # ------------------------------------------------------------------
         for params in ParameterGrid(param_grid):
             lstm_units = params["lstm_units"]
             dropout = params.get("dropout", 0.0)
@@ -247,7 +241,7 @@ def rolling_lstm_pipeline(
             batch_size = params.get("batch_size", 32)
             epochs = params.get("epochs", 10)
 
-            # Compute inverse‑frequency class weights
+            # Calcul des class weights
             unique, counts = np.unique(y_train_np, return_counts=True)
             freqs = counts / counts.sum()
             class_weights_np = 1.0 / freqs
@@ -256,14 +250,14 @@ def rolling_lstm_pipeline(
 
             train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=False)
 
-            # Model, loss, optimiser
+            # Définition du modèle, de la loss et de l’optimiseur
             model = LSTMClassifier(
                 input_size=n_features, hidden_size=lstm_units, dropout=dropout
             ).to(device)
             criterion = nn.CrossEntropyLoss(weight=class_weights)
             optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
-            # ----------------------- Training loop -----------------------
+            # Boucle d’entraînement
             model.train()
             for _ in range(epochs):
                 for X_batch, y_batch in train_loader:
@@ -273,7 +267,7 @@ def rolling_lstm_pipeline(
                     loss.backward()
                     optimizer.step()
 
-            # ----------------------- Evaluation -------------------------
+            # Phase d’évaluation
             model.eval()
             with torch.no_grad():
                 logits_test = model(X_test)
@@ -282,7 +276,7 @@ def rolling_lstm_pipeline(
             y_pred_np = predictions.cpu().numpy().astype(int)
             y_true_np = y_test.cpu().numpy().astype(int)
 
-            # Metrics
+            # Calcul des métriques
             acc = accuracy_score(y_true_np, y_pred_np)
             f1_w = f1_score(y_true_np, y_pred_np, average="weighted", zero_division=0)
             recall_w = recall_score(y_true_np, y_pred_np, average="weighted", zero_division=0)
@@ -290,7 +284,6 @@ def rolling_lstm_pipeline(
                 y_true_np, y_pred_np, digits=3, output_dict=True, zero_division=0
             )
 
-            # Collect results
             results.append(
                 {
                     "window_size": window_size,
@@ -311,7 +304,7 @@ def rolling_lstm_pipeline(
                 }
             )
 
-            # Free GPU memory if necessary
+            # Nettoyage GPU si nécessaire
             del model, optimizer, criterion, train_loader
             if device.startswith("cuda"):
                 torch.cuda.empty_cache()
@@ -319,180 +312,140 @@ def rolling_lstm_pipeline(
     return pd.DataFrame(results).sort_values("f1_weighted", ascending=False)
 
 
-def rolling_svm_pipeline(
-    features_df: pd.DataFrame,
-    window_sizes: list[int],
-    param_grid: dict,
-    test_fraction: float = 0.3,
-    target_col: str = "Log_Return",
-    kernel: str = "rbf",
-    class_weight: str | dict | None = "balanced",
-) -> pd.DataFrame:
-    """Rolling‑window SVM classification using a *scikit‑learn* pipeline.
+def evaluate_svm_rolling_params(
+    dataset: pd.DataFrame,
+    date_col: str = "Date",
+    close_col: str = "Close",
+    rolling_windows: list = [50, 100, 200],
+    C_list: list = [0.1, 1.0, 10.0],
+    svm_kernel: str = "rbf",
+    svm_gamma: str = "scale",
+    oversample: bool = True,
+    use_bagging: bool = False,
+    bagging_n_estimators: int = 5,
+):
+    """
+    Évalue un SVM (rolling window) pour prédire la variation du
+    jour suivant (hausse/baisse), en testant plusieurs valeurs de C,
+    avec option pour envelopper le SVM dans un BaggingClassifier.
 
-    For every *window_size*, the function trains on the preceding ``window_size``
-    days and predicts the next day.  Hyper‑parameters are explored via
-    ``ParameterGrid``.  Metrics are aggregated across the entire test segment.
+    Paramètres :
+    - dataset              : DataFrame contenant au minimum les colonnes date_col et close_col,
+                             ainsi que les features (déjà trié chronologiquement, ascendant).
+    - date_col             : nom de la colonne Date (type datetime ou convertible).
+    - close_col            : nom de la colonne “cours de clôture” (float).
+    - rolling_windows      : liste des tailles de fenêtres (en nombre de jours).
+    - C_list               : liste des valeurs de C à tester pour le SVM.
+    - svm_kernel           : noyau du SVM (par ex. 'rbf', 'linear', etc.).
+    - svm_gamma            : paramètre gamma du SVM (par ex. 'scale' ou 'auto').
+    - oversample           : si True, on applique SMOTE à chaque jeu d’entraînement.
+    - use_bagging          : si True, on enveloppe le SVM dans un BaggingClassifier.
+    - bagging_n_estimators : nombre d’estimateurs pour le BaggingClassifier (si use_bagging=True).
+
+    Retourne :
+    - results_df : DataFrame où chaque ligne correspond à (window_size, C) et comporte :
+        • accuracy
+        • f1_weighted
+        • precision_class_0, precision_class_1
+        • recall_class_0,    recall_class_1
+        • f1_class_0,        f1_class_1
+    - cm_dict    : dictionnaire dont la clé est (window_size, C) et la valeur
+                   est la matrice de confusion (2×2) correspondante.
     """
 
-    def build_dataset(df: pd.DataFrame, window_size: int):
-        X, y = [], []
-        for idx in range(window_size, len(df) - 1):
-            X.append(df.iloc[idx - window_size : idx].values.flatten())
-            y.append(int(df[target_col].iloc[idx + 1] > 0))
-        return np.asarray(X), np.asarray(y)
+    # 1. Préparation des données
+    data = dataset.copy()
 
-    results: list[dict] = []
+    # Assurer que la colonne date est en datetime
+    data[date_col] = pd.to_datetime(data[date_col])
+    # On s'assure que c’est trié dans l’ordre croissant
+    data = data.sort_values(by=date_col).reset_index(drop=True)
 
-    for window_size in window_sizes:
-        X, y = build_dataset(features_df, window_size)
+    # 2. Construction de la cible : label_next = 1 si Close_{t+1} >= Close_t, sinon 0
+    data["label_next"] = (data[close_col].shift(-1) >= data[close_col]).astype(int)
+    # On ne peut pas prédire pour le dernier jour, donc on le supprime
+    data = data.iloc[:-1].reset_index(drop=True)
 
-        for params in ParameterGrid(param_grid):
-            y_true, y_pred = [], []
+    # 3. Mise en forme des X et y « complets »
+    #    On suppose que toutes les colonnes sauf date_col et label_next sont des features.
+    feature_cols = [col for col in data.columns if col not in [date_col, "label_next"]]
+    X_full = data[feature_cols].values
+    y_full = data["label_next"].values
 
-            start_test_idx = int(len(X) * (1 - test_fraction))
-            for t in range(start_test_idx, len(X) - 1):
-                X_train, y_train = X[t - window_size : t], y[t - window_size : t]
-                X_test, y_test = X[t].reshape(1, -1), y[t]
+    # Pour stocker les résultats
+    records = []
+    cm_dict = {}
 
-                # Skip if training slice lacks variability
-                if len(np.unique(y_train)) < 2:
-                    continue
+    # 4. Boucle sur toutes les combinaisons (window_size, C)
+    for window in rolling_windows:
+        for C_val in C_list:
+            preds = []
+            truths = []
 
-                svc = SVC(kernel=kernel, class_weight=class_weight)
-                svc.set_params(**{k.replace("svc__", ""): v for k, v in params.items()})
+            # On ne peut commencer qu'à partir de l'indice = window
+            for t in range(window, len(data)):
+                # 4.a. Extraire X_train, y_train, X_test, y_test
+                X_train = X_full[t - window : t]
+                y_train = y_full[t - window : t]
+                X_test = X_full[t].reshape(1, -1)
+                y_test = y_full[t]
 
-                pipeline = Pipeline(
-                    [
-                        ("scaler", StandardScaler()),
-                        ("svc", svc),
-                    ]
-                )
+                # 4.b. SMOTE si demandé
+                if oversample:
+                    smote = SMOTE(random_state=0)
+                    X_train, y_train = smote.fit_resample(X_train, y_train)
 
-                pipeline.fit(X_train, y_train)
-                y_hat = pipeline.predict(X_test)[0]
+                # 4.c. Standardisation robuste
+                scaler = RobustScaler()
+                X_train = scaler.fit_transform(X_train)
+                X_test = scaler.transform(X_test)
 
-                y_true.append(y_test)
-                y_pred.append(y_hat)
+                # 4.d. Initialisation du classifieur SVM ou Bagging(SVM)
+                svm = SVC(kernel=svm_kernel, C=C_val, gamma=svm_gamma)
+                if use_bagging:
+                    clf = BaggingClassifier(
+                        estimator=svm,
+                        n_estimators=bagging_n_estimators,
+                        bootstrap=True,
+                        random_state=0,
+                    )
+                else:
+                    clf = svm
 
-            if not y_true:
-                continue
+                # 4.e. Entraînement et prédiction
+                clf.fit(X_train, y_train)
+                pred = clf.predict(X_test)[0]
+                preds.append(pred)
+                truths.append(y_test)
 
-            acc = accuracy_score(y_true, y_pred)
-            f1_w = f1_score(y_true, y_pred, average="weighted", zero_division=0)
-            recall_w = recall_score(y_true, y_pred, average="weighted", zero_division=0)
-            report = classification_report(
-                y_true, y_pred, digits=3, output_dict=True, zero_division=0
-            )
+            # 5. Calcul des métriques pour cette paire (window, C_val)
+            acc = accuracy_score(truths, preds)
+            prec_per_class = precision_score(truths, preds, average=None, zero_division=0)
+            rec_per_class = recall_score(truths, preds, average=None, zero_division=0)
+            f1_per_class = f1_score(truths, preds, average=None, zero_division=0)
+            f1_weighted = f1_score(truths, preds, average="weighted")
+            cm = confusion_matrix(truths, preds)
 
-            results.append(
+            # Remplir un enregistrement
+            records.append(
                 {
-                    "window_size": window_size,
-                    "C": params["svc__C"],
-                    "gamma": params["svc__gamma"],
+                    "window_size": window,
+                    "C": C_val,
                     "accuracy": acc,
-                    "recall_weighted": recall_w,
-                    "f1_weighted": f1_w,
-                    "precision_0": report["0"]["precision"],
-                    "precision_1": report["1"]["precision"],
-                    "recall_0": report["0"]["recall"],
-                    "recall_1": report["1"]["recall"],
-                    "f1_0": report["0"]["f1-score"],
-                    "f1_1": report["1"]["f1-score"],
+                    "f1_weighted": f1_weighted,
+                    "precision_class_0": prec_per_class[0],
+                    "precision_class_1": prec_per_class[1],
+                    "recall_class_0": rec_per_class[0],
+                    "recall_class_1": rec_per_class[1],
+                    "f1_class_0": f1_per_class[0],
+                    "f1_class_1": f1_per_class[1],
                 }
             )
+            cm_dict[(window, C_val)] = cm
 
-    return pd.DataFrame(results).sort_values("f1_weighted", ascending=False)
-
-
-def rolling_ensemble_svm_pipeline(
-    features_df: pd.DataFrame,
-    window_sizes: list[int],
-    param_grid: dict,
-    test_fraction: float = 0.3,
-    target_col: str = "Log_Return",
-    kernel: str = "rbf",
-    class_weight: str | dict | None = "balanced",
-    n_estimators: int = 10,
-    bootstrap: bool = True,
-    n_jobs: int = -1,
-) -> pd.DataFrame:
-    """Bagging ensemble of SVMs evaluated in a rolling‑window fashion."""
-
-    def build_dataset(df: pd.DataFrame, window_size: int):
-        X, y = [], []
-        for idx in range(window_size, len(df) - 1):
-            X.append(df.iloc[idx - window_size : idx].values.flatten())
-            y.append(int(df[target_col].iloc[idx + 1] > 0))
-        return np.asarray(X), np.asarray(y)
-
-    results: list[dict] = []
-
-    for window_size in window_sizes:
-        X, y = build_dataset(features_df, window_size)
-
-        for params in ParameterGrid(param_grid):
-            y_true, y_pred = [], []
-
-            start_test_idx = int(len(X) * (1 - test_fraction))
-            for t in range(start_test_idx, len(X) - 1):
-                X_train, y_train = X[t - window_size : t], y[t - window_size : t]
-                X_test, y_test = X[t].reshape(1, -1), y[t]
-
-                if len(np.unique(y_train)) < 2:
-                    continue
-
-                base_svc = SVC(kernel=kernel, class_weight=class_weight)
-                base_svc.set_params(**{k.replace("svc__", ""): v for k, v in params.items()})
-
-                bagging_clf = BaggingClassifier(
-                    estimator=base_svc,
-                    n_estimators=n_estimators,
-                    bootstrap=bootstrap,
-                    n_jobs=n_jobs,
-                )
-
-                pipeline = Pipeline(
-                    [
-                        ("scaler", StandardScaler()),
-                        ("bagging", bagging_clf),
-                    ]
-                )
-
-                pipeline.fit(X_train, y_train)
-                y_hat = pipeline.predict(X_test)[0]
-
-                y_true.append(y_test)
-                y_pred.append(y_hat)
-
-            if not y_true:
-                continue
-
-            acc = accuracy_score(y_true, y_pred)
-            f1_w = f1_score(y_true, y_pred, average="weighted", zero_division=0)
-            recall_w = recall_score(y_true, y_pred, average="weighted", zero_division=0)
-            report = classification_report(
-                y_true, y_pred, digits=3, output_dict=True, zero_division=0
-            )
-
-            results.append(
-                {
-                    "window_size": window_size,
-                    "C": params["svc__C"],
-                    "gamma": params["svc__gamma"],
-                    "accuracy": acc,
-                    "recall_weighted": recall_w,
-                    "f1_weighted": f1_w,
-                    "precision_0": report["0"]["precision"],
-                    "precision_1": report["1"]["precision"],
-                    "recall_0": report["0"]["recall"],
-                    "recall_1": report["1"]["recall"],
-                    "f1_0": report["0"]["f1-score"],
-                    "f1_1": report["1"]["f1-score"],
-                }
-            )
-
-    return pd.DataFrame(results).sort_values("f1_weighted", ascending=False)
+    # 6. Construction du DataFrame final (trié sur f1_weighted décroissant)
+    results_df = pd.DataFrame.from_records(records)
+    return results_df.sort_values(by="f1_weighted", ascending=False), cm_dict
 
 
 # ----------------------------------------------------------------------------
@@ -500,7 +453,7 @@ def rolling_ensemble_svm_pipeline(
 # ----------------------------------------------------------------------------
 
 
-def compute_non_weighted_sentiment_score(
+def compute_non_weighted_sentiment_score_two_classes(
     df, sentiment_col="sentiment_base", bullish="Bullish", bearish="Bearish", score_col="score"
 ):
     sentiment = []
@@ -511,11 +464,11 @@ def compute_non_weighted_sentiment_score(
 
         nb_tweets = group.shape[0]
 
-        sentiment.append({"date": date, score_col: score, "nb_tweets": nb_tweets})
+        sentiment.append({"Date": date, score_col: score, "nb_tweets": nb_tweets})
     return pd.DataFrame(sentiment)
 
 
-def compute_weighted_sentiment_scores(
+def compute_weighted_sentiment_scores_two_classes(
     df,
     sentiment_col="sentiment_base",
     bullish="Bullish",
@@ -533,7 +486,7 @@ def compute_weighted_sentiment_scores(
 
         nb_tweets = group.shape[0]
 
-        sentiment.append({"date": date, score_col: score, "nb_tweets": nb_tweets})
+        sentiment.append({"Date": date, score_col: score, "nb_tweets": nb_tweets})
     return pd.DataFrame(sentiment)
 
 
@@ -557,5 +510,9 @@ def compute_weighted_sentiment_scores_three_classes(
 
         nb_tweets = group.shape[0]
 
-        sentiment.append({"date": date, score_col: score, "nb_tweets": nb_tweets})
+        sentiment.append({"Date": date, score_col: score, "nb_tweets": nb_tweets})
     return pd.DataFrame(sentiment)
+
+
+def compute_data_scenario(df, cols: list = None, date_col: str = "Date") -> pd.DataFrame:
+    return df[[date_col] + cols].dropna()

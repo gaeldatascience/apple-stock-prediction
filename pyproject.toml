@@ -35,6 +35,7 @@ dependencies = [
     "emoji>=2.14.1",
     "transformers>=4.52.4",
     "nltk>=3.9.1",
+    "imblearn>=0.0",
 ]
 
 [tool.black]
