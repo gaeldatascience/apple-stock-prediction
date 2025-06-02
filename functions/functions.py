@@ -493,3 +493,69 @@ def rolling_ensemble_svm_pipeline(
             )
 
     return pd.DataFrame(results).sort_values("f1_weighted", ascending=False)
+
+
+# ----------------------------------------------------------------------------
+# Compute sentiment scores
+# ----------------------------------------------------------------------------
+
+
+def compute_non_weighted_sentiment_score(
+    df, sentiment_col="sentiment_base", bullish="Bullish", bearish="Bearish", score_col="score"
+):
+    sentiment = []
+    for date, group in df.groupby("date"):
+        pos = group[sentiment_col].value_counts().get(bullish, 0)
+        neg = group[sentiment_col].value_counts().get(bearish, 0)
+        score = np.log((1 + pos) / (1 + neg))
+
+        nb_tweets = group.shape[0]
+
+        sentiment.append({"date": date, score_col: score, "nb_tweets": nb_tweets})
+    return pd.DataFrame(sentiment)
+
+
+def compute_weighted_sentiment_scores(
+    df,
+    sentiment_col="sentiment_base",
+    bullish="Bullish",
+    bearish="Bearish",
+    like_col="likes_ponderation",
+    score_col="score",
+):
+    sentiment = []
+    for date, group in df.groupby("date"):
+
+        pos_likes = group.loc[group[sentiment_col] == bullish, like_col].sum()
+        neg_likes = group.loc[group[sentiment_col] == bearish, like_col].sum()
+
+        score = np.log((1 + pos_likes) / (1 + neg_likes))
+
+        nb_tweets = group.shape[0]
+
+        sentiment.append({"date": date, score_col: score, "nb_tweets": nb_tweets})
+    return pd.DataFrame(sentiment)
+
+
+def compute_weighted_sentiment_scores_three_classes(
+    df,
+    sentiment_col="sentiment_base",
+    bullish="Bullish",
+    bearish="Bearish",
+    neutral="Neutral",
+    like_col="likes_ponderation",
+    score_col="score",
+):
+    sentiment = []
+    for date, group in df.groupby("date"):
+
+        pos_likes = group.loc[group[sentiment_col] == bullish, like_col].sum()
+        neg_likes = group.loc[group[sentiment_col] == bearish, like_col].sum()
+        neutral_likes = group.loc[group[sentiment_col] == neutral, like_col].sum()
+
+        score = (pos_likes - neg_likes) / (pos_likes + neg_likes + neutral_likes)
+
+        nb_tweets = group.shape[0]
+
+        sentiment.append({"date": date, score_col: score, "nb_tweets": nb_tweets})
+    return pd.DataFrame(sentiment)
