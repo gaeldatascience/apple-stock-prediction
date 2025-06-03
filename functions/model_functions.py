@@ -2,19 +2,22 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader, TensorDataset
+from imblearn.over_sampling import SMOTE
 from sklearn.ensemble import BaggingClassifier
 from sklearn.metrics import (
     accuracy_score,
+    classification_report,
     confusion_matrix,
     f1_score,
     precision_score,
     recall_score,
 )
-from sklearn.preprocessing import RobustScaler
+from sklearn.model_selection import ParameterGrid
+from sklearn.preprocessing import RobustScaler, StandardScaler
 from sklearn.svm import SVC
-from imblearn.over_sampling import SMOTE
 from xgboost import XGBClassifier
+import random
 
 
 def evaluate_svm_rolling_params(
@@ -171,38 +174,38 @@ def evaluate_xgb_rolling_params(
     oversample: bool = True,
 ):
     """
-    Évalue un XGBoost (rolling window) pour prédire la variation du
-    jour suivant (hausse/baisse), en testant plusieurs combinaisons d’hyperparamètres.
+    Evaluate an XGBoost (rolling window) to predict the next day's variation (up/down),
+    testing several combinations of hyperparameters.
 
-    Paramètres :
-    - dataset                : DataFrame contenant au minimum les colonnes date_col et close_col,
-                               ainsi que les features (déjà trié chronologiquement, ascendant).
-    - date_col               : nom de la colonne Date (type datetime ou convertible).
-    - close_col              : nom de la colonne “cours de clôture” (float).
-    - rolling_windows        : liste des tailles de fenêtres (en nombre de jours).
-    - n_estimators_list      : liste des valeurs de n_estimators à tester.
-    - max_depth_list         : liste des profondeurs maximales à tester.
-    - learning_rate_list     : liste des learning_rate à tester.
-    - gamma_list             : liste des gamma à tester.
-    - subsample_list         : liste des subsample à tester.
-    - colsample_bytree_list  : liste des colsample_bytree à tester.
-    - oversample             : si True, on applique SMOTE à chaque jeu d’entraînement.
+    Parameters:
+    - dataset                : DataFrame containing at least the columns date_col and close_col,
+                               as well as features (already sorted chronologically, ascending).
+    - date_col               : name of the Date column (datetime type or convertible).
+    - close_col              : name of the "close price" column (float).
+    - rolling_windows        : list of window sizes (in number of days).
+    - n_estimators_list      : list of n_estimators values to test.
+    - max_depth_list         : list of max_depth values to test.
+    - learning_rate_list     : list of learning_rate values to test.
+    - gamma_list             : list of gamma values to test.
+    - subsample_list         : list of subsample values to test.
+    - colsample_bytree_list  : list of colsample_bytree values to test.
+    - oversample             : if True, apply SMOTE to each training set.
 
-    Retourne :
-    - results_df : DataFrame où chaque ligne correspond à une combinaison
+    Returns:
+    - results_df : DataFrame where each row corresponds to a combination
                    (window_size, n_estimators, max_depth, learning_rate, gamma, subsample, colsample_bytree)
-                   et comporte :
+                   and contains:
        • accuracy
        • f1_weighted
        • precision_class_0, precision_class_1
        • recall_class_0,    recall_class_1
        • f1_class_0,        f1_class_1
-    - cm_dict    : dictionnaire dont la clé est le tuple
+    - cm_dict    : dictionary where the key is the tuple
                    (window_size, n_estimators, max_depth, learning_rate, gamma, subsample, colsample_bytree)
-                   et la valeur est la matrice de confusion (2×2) correspondante.
+                   and the value is the corresponding confusion matrix (2×2).
     """
 
-    # Valeurs par défaut
+    # Default values
     if rolling_windows is None:
         rolling_windows = [50, 100, 200]
     if n_estimators_list is None:
@@ -218,26 +221,26 @@ def evaluate_xgb_rolling_params(
     if colsample_bytree_list is None:
         colsample_bytree_list = [1.0]
 
-    # 1. Préparation des données
+    # 1. Data preparation
     data = dataset.copy()
 
-    # 1.a. Conversion de la colonne date en datetime
+    # Ensure the date column is datetime
     data[date_col] = pd.to_datetime(data[date_col])
-    # 1.b. Tri chronologique ascendant
+    # Ensure it is sorted in ascending order
     data = data.sort_values(by=date_col).reset_index(drop=True)
 
-    # 2. Construction de la cible : label_next = 1 si Close_{t+1} >= Close_t, sinon 0
+    # 2. Target construction: label_next = 1 if Close_{t+1} >= Close_t, else 0
     data["label_next"] = (data[close_col].shift(-1) >= data[close_col]).astype(int)
-    # On ne peut pas prédire pour le dernier jour, donc on le supprime
+    # Cannot predict for the last day, so remove it
     data = data.iloc[:-1].reset_index(drop=True)
 
-    # 3. Sélection des features
-    #    On suppose que toutes les colonnes sauf date_col et label_next sont des features.
+    # 3. Build the "full" X and y
+    #    Assume all columns except date_col and label_next are features.
     feature_cols = [col for col in data.columns if col not in [date_col, "label_next"]]
     X_full = data[feature_cols].values
     y_full = data["label_next"].values
 
-    # 4. Préparer la grille d’hyperparamètres
+    # 4. Prepare the hyperparameter grid
     from itertools import product
 
     param_grid = list(
@@ -255,7 +258,7 @@ def evaluate_xgb_rolling_params(
     records = []
     cm_dict = {}
 
-    # 5. Boucle sur chaque combinaison de paramètres
+    # 5. Loop over each parameter combination
     for (
         window,
         n_estimators,
@@ -269,24 +272,24 @@ def evaluate_xgb_rolling_params(
         preds = []
         truths = []
 
-        # 5.a. Pour chaque t ≥ window, on entraîne sur [t-window … t[ et on teste sur t
+        # 5.a. For each t ≥ window, train on [t-window … t[ and test on t
         for t in range(window, len(data)):
             X_train = X_full[t - window : t]
             y_train = y_full[t - window : t]
             X_test = X_full[t].reshape(1, -1)
             y_test = y_full[t]
 
-            # 5.b. SMOTE si demandé
+            # 5.b. SMOTE if requested
             if oversample:
                 smote = SMOTE(random_state=0)
                 X_train, y_train = smote.fit_resample(X_train, y_train)
 
-            # 5.c. Standardisation robuste
+            # 5.c. Robust standardization
             scaler = RobustScaler()
             X_train = scaler.fit_transform(X_train)
             X_test = scaler.transform(X_test)
 
-            # 5.d. Initialisation de XGBClassifier avec les hyperparamètres courants
+            # 5.d. XGBClassifier initialization with current hyperparameters
             clf = XGBClassifier(
                 n_estimators=n_estimators,
                 max_depth=max_depth,
@@ -300,13 +303,13 @@ def evaluate_xgb_rolling_params(
                 n_jobs=-1,
             )
 
-            # 5.e. Entraînement et prédiction
+            # 5.e. Training and prediction
             clf.fit(X_train, y_train)
             pred = clf.predict(X_test)[0]
             preds.append(pred)
             truths.append(y_test)
 
-        # 6. Calcul des métriques pour cette configuration
+        # 6. Compute metrics for this configuration
         acc = accuracy_score(truths, preds)
         prec_per_class = precision_score(truths, preds, average=None, zero_division=0)
         rec_per_class = recall_score(truths, preds, average=None, zero_division=0)
@@ -314,7 +317,7 @@ def evaluate_xgb_rolling_params(
         f1_weighted = f1_score(truths, preds, average="weighted")
         cm = confusion_matrix(truths, preds)
 
-        # 7. Stockage du résultat
+        # 7. Store the result
         record = {
             "window_size": window,
             "n_estimators": n_estimators,
@@ -353,63 +356,47 @@ def evaluate_xgb_rolling_params(
     return results_df, cm_dict
 
 
-import os
-import random
-import numpy as np
-import pandas as pd
-import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader, TensorDataset
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import (
-    accuracy_score,
-    precision_score,
-    recall_score,
-    f1_score,
-    classification_report,
-)
-from sklearn.model_selection import ParameterGrid
-
-
-# ─── Gestion de la graine pour la reproductibilité ─────────────────────────────
 def set_reproducible(seed: int = 42):
+    """
+    Set all random seeds for reproducibility (Python, NumPy, PyTorch, CUDA).
+    """
+
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)
-    # Rendre cuDNN déterministe (au détriment de la vitesse)
+    # Make cuDNN deterministic (at the cost of speed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
 
-# ─── Classe LSTMClassifier avec dropout et 2 logits ────────────────────────────
 class LSTMClassifier(nn.Module):
     """
-    LSTM suivi d'une couche linéaire produisant deux logits (classe 0 vs classe 1).
+    LSTM followed by a linear layer producing two logits (class 0 vs class 1).
     """
 
     def __init__(self, input_size: int, hidden_size: int, dropout: float):
         super(LSTMClassifier, self).__init__()
-        # Si num_layers > 1, dropout s'appliquera entre les couches LSTM
-        # (si num_layers == 1, pytorch ignore dropout dans LSTM)
+        # If num_layers > 1, dropout will be applied between LSTM layers
+        # (if num_layers == 1, pytorch ignores dropout in LSTM)
         self.lstm = nn.LSTM(
             input_size=input_size,
             hidden_size=hidden_size,
             batch_first=True,
             dropout=dropout if dropout > 0 else 0.0,
         )
-        # Couche linéaire finale : hidden_size → 2 logits
+        # Final linear layer: hidden_size → 2 logits
         self.fc = nn.Linear(hidden_size, 2)
 
     def forward(self, x):
         # x : (batch, seq_len, input_size)
         _, (hn, _) = self.lstm(x)
         # hn shape = (num_layers * num_directions, batch, hidden_size)
-        last_hidden = hn[-1]  # on prend la dernière couche cachée : (batch, hidden_size)
+        last_hidden = hn[-1]  # take the last hidden state: (batch, hidden_size)
         logits = self.fc(last_hidden)  # (batch, 2)
-        return logits  # on renvoie directement les 2 logits
+        return logits  # directly return the 2 logits
 
 
 def rolling_lstm_pipeline_pytorch(
@@ -421,15 +408,15 @@ def rolling_lstm_pipeline_pytorch(
     seed: int = 42,
 ) -> pd.DataFrame:
     """
-    Pipeline LSTM « rolling » (PyTorch) pour prédire la direction du cours (up/down)
-    en se basant sur la variable 'Close' comme cible, et en scalant toutes les features.
+    Rolling LSTM pipeline (PyTorch) to predict the direction of the price (up/down)
+    based on the 'Close' variable as target, scaling all features.
 
-    Paramètres :
-    - features_df    : DataFrame avec au moins la colonne "Close" et éventuellement d'autres features.
-                       On suppose que les lignes sont déjà triées chronologiquement (du plus ancien au plus récent).
-    - window_sizes   : liste des tailles de fenêtres (entiers).
-    - param_grid     : dictionnaire d'hyperparamètres compatible sklearn.model_selection.ParameterGrid.
-                       Par exemple :
+    Parameters:
+    - features_df    : DataFrame with at least the column "Close" and possibly other features.
+                       Rows are assumed to be already sorted chronologically (oldest to newest).
+    - window_sizes   : list of window sizes (integers).
+    - param_grid     : dictionary of hyperparameters compatible with sklearn.model_selection.ParameterGrid.
+                       For example:
                        {
                          "lstm_units":     [32, 64],
                          "dropout":        [0.0, 0.2],
@@ -437,15 +424,15 @@ def rolling_lstm_pipeline_pytorch(
                          "batch_size":     [32, 64],
                          "epochs":         [10, 20]
                        }
-                       **Remarque :** La clef doit être exactement celle attendue dans la boucle For
-                       (voir plus bas).
-    - test_fraction  : fraction (0..1) du jeu réservée pour le test (à la fin chronologiquement). Défaut : 0.3.
-    - device         : "cpu" ou "cuda". Défaut : "cpu".
-    - seed           : graine pour la reproductibilité. Défaut : 42.
+                       **Note:** The key must match exactly what is expected in the for loop
+                       (see below).
+    - test_fraction  : fraction (0..1) of the set reserved for testing (at the end chronologically). Default: 0.3.
+    - device         : "cpu" or "cuda". Default: "cpu".
+    - seed           : seed for reproducibility. Default: 42.
 
-    Retourne :
-    - df_results : DataFrame trié par f1_weighted décroissant. Chaque ligne correspond à une
-                   combinaison (window_size + params) et les métriques associées.
+    Returns:
+    - df_results : DataFrame sorted by f1_weighted descending. Each row corresponds to a
+                   combination (window_size + params) and the associated metrics.
     """
 
     # 1) Fixer la graine dès le début pour avoir un pipeline reproductible
