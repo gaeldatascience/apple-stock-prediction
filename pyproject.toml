@@ -36,6 +36,7 @@ dependencies = [
     "transformers>=4.52.4",
     "nltk>=3.9.1",
     "imblearn>=0.0",
+    "xgboost>=3.0.2",
 ]
 
 [tool.black]
