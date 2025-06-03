@@ -297,6 +297,7 @@ def evaluate_xgb_rolling_params(
                 use_label_encoder=False,
                 eval_metric="logloss",
                 random_state=0,
+                n_jobs=-1,
             )
 
             # 5.e. Entraînement et prédiction
@@ -352,305 +353,251 @@ def evaluate_xgb_rolling_params(
     return results_df, cm_dict
 
 
-class SequenceDataset(Dataset):
-    """
-    PyTorch Dataset that returns (sequence, label) for each sample.
-    Each sequence is a window of size `window_size` over the features,
-    and the label is the direction of the next day (0 or 1).
-    """
-
-    def __init__(self, X_scaled: np.ndarray, y: np.ndarray, window_size: int):
-        """
-        - X_scaled : numpy array of shape (n_rows, n_features), already normalized.
-        - y        : numpy array of shape (n_rows,), binary labels {0,1}.
-        - window_size : length of the historical sequence.
-
-        We create a sample for each t ∈ [window_size .. n_rows-1] :
-          sequence = X_scaled[t-window_size : t, :]
-          label    = y[t]
-        """
-        self.window_size = window_size
-        sequences = []
-        labels = []
-        n_rows = X_scaled.shape[0]
-
-        for t in range(window_size, n_rows):
-            seq = X_scaled[t - window_size : t, :]  # (window_size, n_features)
-            lbl = y[t]
-            sequences.append(seq)
-            labels.append(lbl)
-
-        self.X_seq = np.stack(sequences, axis=0)  # (n_samples, window_size, n_features)
-        self.y = np.array(labels, dtype=np.float32)  # (n_samples,)
-
-    def __len__(self):
-        return len(self.y)
-
-    def __getitem__(self, idx):
-        # Return the sequence and label as torch tensors
-        return (
-            torch.tensor(self.X_seq[idx], dtype=torch.float32),
-            torch.tensor(self.y[idx], dtype=torch.float32),
-        )
+import os
+import random
+import numpy as np
+import pandas as pd
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader, TensorDataset
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import (
+    accuracy_score,
+    precision_score,
+    recall_score,
+    f1_score,
+    classification_report,
+)
+from sklearn.model_selection import ParameterGrid
 
 
+# ─── Gestion de la graine pour la reproductibilité ─────────────────────────────
+def set_reproducible(seed: int = 42):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+    # Rendre cuDNN déterministe (au détriment de la vitesse)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+
+# ─── Classe LSTMClassifier avec dropout et 2 logits ────────────────────────────
 class LSTMClassifier(nn.Module):
     """
-    LSTM (one or more layers) followed by a linear layer to
-    predict a binary logit. We use BCEWithLogitsLoss with pos_weight.
+    LSTM suivi d'une couche linéaire produisant deux logits (classe 0 vs classe 1).
     """
 
-    def __init__(self, input_size: int, hidden_size: int, num_layers: int = 1):
-        super().__init__()
-        self.hidden_size = hidden_size
-        self.num_layers = num_layers
-
-        # LSTM with batch_first=True ⇒ input shape (batch, seq_len, input_size)
+    def __init__(self, input_size: int, hidden_size: int, dropout: float):
+        super(LSTMClassifier, self).__init__()
+        # Si num_layers > 1, dropout s'appliquera entre les couches LSTM
+        # (si num_layers == 1, pytorch ignore dropout dans LSTM)
         self.lstm = nn.LSTM(
             input_size=input_size,
             hidden_size=hidden_size,
-            num_layers=num_layers,
             batch_first=True,
-            bidirectional=False,
+            dropout=dropout if dropout > 0 else 0.0,
         )
-        # Final linear layer: hidden_size → 1 logit
-        self.fc = nn.Linear(hidden_size, 1)
+        # Couche linéaire finale : hidden_size → 2 logits
+        self.fc = nn.Linear(hidden_size, 2)
 
     def forward(self, x):
-        # x : (batch_size, seq_len, input_size)
-        lstm_out, _ = self.lstm(x)  # lstm_out : (batch_size, seq_len, hidden_size)
-        last_out = lstm_out[:, -1, :]  # (batch_size, hidden_size)
-        logit = self.fc(last_out)  # (batch_size, 1)
-        return logit.squeeze(1)  # (batch_size,)
+        # x : (batch, seq_len, input_size)
+        _, (hn, _) = self.lstm(x)
+        # hn shape = (num_layers * num_directions, batch, hidden_size)
+        last_hidden = hn[-1]  # on prend la dernière couche cachée : (batch, hidden_size)
+        logits = self.fc(last_hidden)  # (batch, 2)
+        return logits  # on renvoie directement les 2 logits
 
 
-def evaluate_lstm_rolling_params(
-    dataset: pd.DataFrame,
-    date_col: str = "Date",
-    close_col: str = "Close",
-    rolling_windows: list = None,
-    hidden_size_list: list = None,
-    num_layers_list: list = None,
-    lr_list: list = None,
-    epochs_list: list = None,
-    batch_size_list: list = None,
-    test_ratio: float = 0.2,
+def rolling_lstm_pipeline_pytorch(
+    features_df: pd.DataFrame,
+    window_sizes: list,
+    param_grid: dict,
+    test_fraction: float = 0.3,
     device: str = "cpu",
-):
+    seed: int = 42,
+) -> pd.DataFrame:
     """
-    Evaluate an LSTM (with PyTorch) to predict the next day's variation (up=1/down=0),
-    for several window sizes and LSTM hyperparameters.
-    We handle imbalance using pos_weight in the loss.
+    Pipeline LSTM « rolling » (PyTorch) pour prédire la direction du cours (up/down)
+    en se basant sur la variable 'Close' comme cible, et en scalant toutes les features.
 
-    Parameters:
-    - dataset           : DataFrame containing at least the columns date_col and close_col,
-                          as well as features (already sorted chronologically, ascending).
-    - date_col          : name of the Date column (datetime or convertible).
-    - close_col         : name of the "close" column (float).
-    - rolling_windows   : list of window sizes (in number of days). Default [50, 100, 200].
-    - hidden_size_list  : list of hidden_size values to test for the LSTM. Default [32].
-    - num_layers_list   : list of LSTM layer counts to test. Default [1].
-    - lr_list           : list of learning rates to test. Default [1e-3].
-    - epochs_list       : list of epoch counts to test. Default [10].
-    - batch_size_list   : list of batch sizes to test. Default [32].
-    - test_ratio        : proportion of samples reserved for test (chronologically at the end). Default 0.2.
-    - device            : "cpu" or "cuda" as available. Default "cpu".
+    Paramètres :
+    - features_df    : DataFrame avec au moins la colonne "Close" et éventuellement d'autres features.
+                       On suppose que les lignes sont déjà triées chronologiquement (du plus ancien au plus récent).
+    - window_sizes   : liste des tailles de fenêtres (entiers).
+    - param_grid     : dictionnaire d'hyperparamètres compatible sklearn.model_selection.ParameterGrid.
+                       Par exemple :
+                       {
+                         "lstm_units":     [32, 64],
+                         "dropout":        [0.0, 0.2],
+                         "learning_rate":  [1e-3, 5e-4],
+                         "batch_size":     [32, 64],
+                         "epochs":         [10, 20]
+                       }
+                       **Remarque :** La clef doit être exactement celle attendue dans la boucle For
+                       (voir plus bas).
+    - test_fraction  : fraction (0..1) du jeu réservée pour le test (à la fin chronologiquement). Défaut : 0.3.
+    - device         : "cpu" ou "cuda". Défaut : "cpu".
+    - seed           : graine pour la reproductibilité. Défaut : 42.
 
-    Returns:
-    - results_df : DataFrame where each row corresponds to (window_size, hidden_size, num_layers, lr, epochs, batch_size)
-                   and contains:
-        • accuracy
-        • f1_weighted
-        • precision_class_0, precision_class_1
-        • recall_class_0,    recall_class_1
-        • f1_class_0,        f1_class_1
-    - cm_dict    : dictionary where the key is the tuple
-                   (window_size, hidden_size, num_layers, lr, epochs, batch_size)
-                   and the value is the corresponding confusion matrix (2×2).
+    Retourne :
+    - df_results : DataFrame trié par f1_weighted décroissant. Chaque ligne correspond à une
+                   combinaison (window_size + params) et les métriques associées.
     """
-    # 0. Default values
-    if rolling_windows is None:
-        rolling_windows = [50, 100, 200]
-    if hidden_size_list is None:
-        hidden_size_list = [32]
-    if num_layers_list is None:
-        num_layers_list = [1]
-    if lr_list is None:
-        lr_list = [1e-3]
-    if epochs_list is None:
-        epochs_list = [10]
-    if batch_size_list is None:
-        batch_size_list = [32]
 
-    # 1. Data preparation
-    data = dataset.copy()
-    data[date_col] = pd.to_datetime(data[date_col])
-    data = data.sort_values(by=date_col).reset_index(drop=True)
+    # 1) Fixer la graine dès le début pour avoir un pipeline reproductible
+    set_reproducible(seed)
 
-    # 2. Target construction: label_next = 1 if Close_{t+1} >= Close_t, else 0
-    data["label_next"] = (data[close_col].shift(-1) >= data[close_col]).astype(int)
-    # Cannot predict for the last date
-    data = data.iloc[:-1].reset_index(drop=True)
+    # 2) Préparation du DataFrame et construction de la cible binaire à partir de "Close"
+    df = features_df.copy().reset_index(drop=True)
+    # On calcule label_next = 1 si Close_{t+1} >= Close_t, sinon 0
+    df["label_next"] = (df["Close"].shift(-1) >= df["Close"]).astype(int)
+    # On retire la dernière ligne (pas de cible pour elle)
+    df = df.iloc[:-1].reset_index(drop=True)
 
-    # 3. Feature selection and global scaling
-    feature_cols = [col for col in data.columns if col not in [date_col, "label_next"]]
-    X_full = data[feature_cols].values  # (n_rows, n_features)
-    y_full = data["label_next"].values  # (n_rows,)
+    # 3) Normalisation de toutes les features (dont "Close" si elle fait partie de features_df)
+    feature_cols = [col for col in df.columns if col != "label_next"]
+    X_full = df[feature_cols].values  # matrice (n_rows, n_features)
+    y_full = df["label_next"].values  # vecteur (n_rows,)
 
-    scaler = RobustScaler()
+    scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X_full)
 
+    # 4) Fonction interne pour construire les séquences (X, y) selon une window
+    def build_dataset(X: np.ndarray, y: np.ndarray, window_size: int):
+        """
+        À partir de :
+          - X : tableau NumPy (n_rows, n_features) déjà scalé,
+          - y : vecteur NumPy (n_rows,) de labels {0,1},
+          - window_size : entier.
+        Construit deux tableaux :
+          - X_seq : (n_samples, window_size, n_features)
+          - y_seq : (n_samples,)
+        avec n_samples = n_rows - window_size.
+        """
+        X_list, y_list = [], []
+        n_rows = X.shape[0]
+        for i in range(window_size, n_rows):
+            X_list.append(X[i - window_size : i, :])  # (window_size, n_features)
+            y_list.append(y[i])
+        return np.array(X_list, dtype=np.float32), np.array(y_list, dtype=np.int64)
+
     results = []
-    cm_dict = {}
 
-    # 4. Main loop over hyperparameter combinations
-    for window in rolling_windows:
-        # 4.a. Create the sequence dataset for this window
-        seq_dataset = SequenceDataset(X_scaled, y_full, window_size=window)
-        n_samples = len(seq_dataset)
+    # 5) Boucle sur chaque window_size
+    for window_size in window_sizes:
+        # Construire X_all, y_all pour cette window
+        X_all, y_all = build_dataset(X_scaled, y_full, window_size)
+        if X_all.shape[0] == 0:
+            continue  # pas assez de données pour cette window
 
-        if n_samples == 0:
-            # If the window is too large (not enough data to form at least one sample)
+        # Split chronologique train / test
+        split_idx = int(len(X_all) * (1 - test_fraction))
+        X_train_np, y_train_np = X_all[:split_idx], y_all[:split_idx]
+        X_test_np, y_test_np = X_all[split_idx:], y_all[split_idx:]
+
+        # Si sur l'ensemble d'entraînement on n'a qu'une seule classe, on skip
+        if len(np.unique(y_train_np)) < 2:
             continue
 
-        # Determine the train/test split index (chronological)
-        split_idx = int(n_samples * (1 - test_ratio))
-        train_indices = list(range(0, split_idx))
-        test_indices = list(range(split_idx, n_samples))
+        # Conversion en tenseurs
+        X_train = torch.from_numpy(X_train_np).to(device)  # (n_train, window_size, n_features)
+        y_train = torch.from_numpy(y_train_np).to(device).long()  # (n_train,)
+        train_dataset = TensorDataset(X_train, y_train)
 
-        # Extract numpy arrays for train/test
-        X_train_seq = seq_dataset.X_seq[train_indices]  # (n_train, window, n_features)
-        y_train_seq = seq_dataset.y[train_indices]  # (n_train,)
-        X_test_seq = seq_dataset.X_seq[test_indices]  # (n_test, window, n_features)
-        y_test_seq = seq_dataset.y[test_indices]  # (n_test,)
+        X_test = torch.from_numpy(X_test_np).to(device)  # (n_test, window_size, n_features)
+        y_test = torch.from_numpy(y_test_np).to(device).long()  # (n_test,)
 
-        # Compute pos_weight for BCEWithLogits:
-        #   pos_weight = (# negative samples) / (# positive samples)
-        n_pos = int(y_train_seq.sum())
-        n_neg = len(y_train_seq) - n_pos
-        if n_pos == 0:
-            pos_weight = 1.0
-        else:
-            pos_weight = n_neg / n_pos
+        n_features = X_train_np.shape[2]  # nombre de features d'entrée
 
-        # Loop over LSTM hyperparameter choices
-        for hidden_size in hidden_size_list:
-            for num_layers in num_layers_list:
-                for lr in lr_list:
-                    for epochs in epochs_list:
-                        for batch_size in batch_size_list:
-                            # 4.b. Prepare DataLoaders (train only, do not mix with test)
-                            train_tensor_x = torch.tensor(X_train_seq, dtype=torch.float32).to(
-                                device
-                            )
-                            train_tensor_y = torch.tensor(y_train_seq, dtype=torch.float32).to(
-                                device
-                            )
-                            test_tensor_x = torch.tensor(X_test_seq, dtype=torch.float32).to(device)
-                            test_tensor_y = torch.tensor(y_test_seq, dtype=torch.float32).to(device)
+        # 6) Boucle sur chaque combinaison d'hyperparamètres
+        for params in ParameterGrid(param_grid):
+            lstm_units = params["lstm_units"]
+            dropout = params.get("dropout", 0.0)
+            lr = params.get("learning_rate", 1e-3)
+            batch_size = params.get("batch_size", 32)
+            epochs = params.get("epochs", 10)
+            num_layers = params.get(
+                "num_layers", 1
+            )  # si vous voulez tester le nombre de couches également
 
-                            train_dataset = torch.utils.data.TensorDataset(
-                                train_tensor_x, train_tensor_y
-                            )
-                            test_dataset = torch.utils.data.TensorDataset(
-                                test_tensor_x, test_tensor_y
-                            )
+            # Re‐seed avant chaque run pour que chaque configuration parte du même état
+            set_reproducible(seed)
 
-                            train_loader = DataLoader(
-                                train_dataset, batch_size=batch_size, shuffle=True
-                            )
-                            test_loader = DataLoader(
-                                test_dataset, batch_size=batch_size, shuffle=False
-                            )
+            # Calcul des poids de classes pour compenser l’imprécision de distribution
+            unique, counts = np.unique(y_train_np, return_counts=True)
+            freqs = counts / counts.sum()
+            class_weights_np = 1.0 / freqs
+            class_weights_np = class_weights_np / class_weights_np.sum() * 2
+            class_weights = torch.tensor(class_weights_np, dtype=torch.float32).to(device)
 
-                            # 4.c. Initialize the model, loss (with pos_weight), and optimizer
-                            n_features = X_scaled.shape[1]
-                            model = LSTMClassifier(
-                                input_size=n_features,
-                                hidden_size=hidden_size,
-                                num_layers=num_layers,
-                            ).to(device)
+            # DataLoader (on peut activer shuffle si besoin, mais sans générateur fixé)
+            train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 
-                            # BCEWithLogitsLoss with pos_weight tensor
-                            pw_tensor = torch.tensor(pos_weight, dtype=torch.float32).to(device)
-                            criterion = nn.BCEWithLogitsLoss(pos_weight=pw_tensor)
-                            optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+            # 7) Initialisation du modèle, perte et optimiseur
+            model = LSTMClassifier(input_size=n_features, hidden_size=lstm_units, dropout=dropout)
+            if device.startswith("cuda"):
+                model = model.to(device)
 
-                            # 4.d. Training loop
-                            model.train()
-                            for _ in range(epochs):
-                                for X_batch, y_batch in train_loader:
-                                    optimizer.zero_grad()
-                                    logits = model(X_batch)  # (batch_size,)
-                                    loss = criterion(logits, y_batch)  # BCEWithLogitsLoss
-                                    loss.backward()
-                                    optimizer.step()
+            criterion = nn.CrossEntropyLoss(weight=class_weights)
+            optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
-                            # 4.e. Evaluation on the test set
-                            model.eval()
-                            all_preds = []
-                            all_truths = []
-                            with torch.no_grad():
-                                for X_batch, y_batch in test_loader:
-                                    logits = model(X_batch)  # (batch_size,)
-                                    probs = torch.sigmoid(logits)  # (batch_size,)
-                                    preds = (probs.cpu().numpy() >= 0.5).astype(int)
-                                    truths = y_batch.cpu().numpy().astype(int)
-                                    all_preds.append(preds)
-                                    all_truths.append(truths)
+            # 8) Entraînement
+            model.train()
+            for _ in range(epochs):
+                for X_batch, y_batch in train_loader:
+                    optimizer.zero_grad()
+                    logits = model(X_batch)  # (batch_size, 2)
+                    loss = criterion(logits, y_batch)  # CrossEntropyLoss
+                    loss.backward()
+                    optimizer.step()
 
-                            all_preds = np.concatenate(all_preds, axis=0)
-                            all_truths = np.concatenate(all_truths, axis=0)
+            # 9) Évaluation sur le jeu test
+            model.eval()
+            with torch.no_grad():
+                logits_test = model(X_test)  # (n_test, 2)
+                preds = torch.argmax(logits_test, dim=1)
+                y_pred_np = preds.cpu().numpy().astype(int)
+                y_true_np = y_test.cpu().numpy().astype(int)
 
-                            # 5. Compute metrics
-                            acc = accuracy_score(all_truths, all_preds)
-                            prec_per_class = precision_score(
-                                all_truths, all_preds, average=None, zero_division=0
-                            )
-                            rec_per_class = recall_score(
-                                all_truths, all_preds, average=None, zero_division=0
-                            )
-                            f1_per_class = f1_score(
-                                all_truths, all_preds, average=None, zero_division=0
-                            )
-                            f1_weighted = f1_score(all_truths, all_preds, average="weighted")
-                            cm = confusion_matrix(all_truths, all_preds)
+            # 10) Calcul des métriques
+            acc = accuracy_score(y_true_np, y_pred_np)
+            f1_w = f1_score(y_true_np, y_pred_np, average="weighted", zero_division=0)
+            recall_w = recall_score(y_true_np, y_pred_np, average="weighted", zero_division=0)
+            report = classification_report(
+                y_true_np, y_pred_np, digits=3, output_dict=True, zero_division=0
+            )
 
-                            # 6. Store the result
-                            record = {
-                                "window_size": window,
-                                "hidden_size": hidden_size,
-                                "num_layers": num_layers,
-                                "learning_rate": lr,
-                                "epochs": epochs,
-                                "batch_size": batch_size,
-                                "accuracy": acc,
-                                "f1_weighted": f1_weighted,
-                                "precision_class_0": prec_per_class[0],
-                                "precision_class_1": prec_per_class[1],
-                                "recall_class_0": rec_per_class[0],
-                                "recall_class_1": rec_per_class[1],
-                                "f1_class_0": f1_per_class[0],
-                                "f1_class_1": f1_per_class[1],
-                            }
-                            results.append(record)
-                            cm_dict[
-                                (
-                                    window,
-                                    hidden_size,
-                                    num_layers,
-                                    lr,
-                                    epochs,
-                                    batch_size,
-                                )
-                            ] = cm
+            results.append(
+                {
+                    "window_size": window_size,
+                    "lstm_units": lstm_units,
+                    "dropout": dropout,
+                    "learning_rate": lr,
+                    "batch_size": batch_size,
+                    "epochs": epochs,
+                    "num_layers": num_layers,
+                    "accuracy": acc,
+                    "recall_weighted": recall_w,
+                    "f1_weighted": f1_w,
+                    "precision_0": report["0"]["precision"],
+                    "precision_1": report["1"]["precision"],
+                    "recall_0": report["0"]["recall"],
+                    "recall_1": report["1"]["recall"],
+                    "f1_0": report["0"]["f1-score"],
+                    "f1_1": report["1"]["f1-score"],
+                }
+            )
 
-                            # Free memory if on GPU
-                            del model, optimizer, train_loader, test_loader, criterion
-                            torch.cuda.empty_cache()
+            # Nettoyage GPU
+            del model, optimizer, criterion, train_loader
+            if device.startswith("cuda"):
+                torch.cuda.empty_cache()
 
-    # 7. Build the final DataFrame, sorted by f1_weighted descending
-    results_df = pd.DataFrame.from_records(results)
-    results_df = results_df.sort_values(by="f1_weighted", ascending=False).reset_index(drop=True)
-
-    return results_df, cm_dict
+    # 11) Construction du DataFrame final, trié par f1_weighted décroissant
+    df_results = pd.DataFrame(results)
+    df_results = df_results.sort_values(by="f1_weighted", ascending=False).reset_index(drop=True)
+    return df_results
