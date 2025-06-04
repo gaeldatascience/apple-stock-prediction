@@ -76,6 +76,66 @@ def set_plot_style() -> None:
     plt.figure().canvas.mpl_connect("draw_event", _on_draw)
 
 
+set_plot_style()
+
+
+# ----------------------------------------------------------------------------
+# Plotting functions
+# ----------------------------------------------------------------------------
+
+
+def plot_strategy_comparison(summary_df, strategy_prefix):
+    fig = plt.figure()
+
+    # === SUBPLOT 1 — 50% Investissement (frac) ===
+    ax1 = plt.subplot(2, 1, 1)
+
+    filtered_df = summary_df.loc[
+        summary_df["Strategy"].str.endswith("frac")
+        & summary_df["Strategy"].str.startswith(strategy_prefix)
+    ].sort_values(by=["Date", "Strategy"], ascending=[False, True])
+
+    ax1.axhspan(1000, filtered_df["Capital_before"].max(), facecolor="green", alpha=0.1)
+    ax1.axhspan(filtered_df["Capital_before"].min(), 1000, facecolor="red", alpha=0.1)
+
+    for strategy in filtered_df["Strategy"].unique():
+        sub_df = filtered_df[filtered_df["Strategy"] == strategy]
+        ax1.plot(sub_df["Date"], sub_df["Capital_before"], label=strategy)
+
+    ax1.set_title(f"{strategy_prefix.upper().replace('_', ' ')}: 50% invested daily, with tx costs")
+    ax1.set_ylabel("Capital ($)")
+    ax1.tick_params(labelbottom=False)
+
+    # === SUBPLOT 2 — 100% Investissement (full) ===
+    ax2 = plt.subplot(2, 1, 2)
+
+    filtered_df = summary_df.loc[
+        summary_df["Strategy"].str.endswith("full")
+        & summary_df["Strategy"].str.startswith(strategy_prefix)
+    ].sort_values(by=["Date", "Strategy"], ascending=[False, True])
+
+    ax2.axhspan(1000, filtered_df["Capital_before"].max(), facecolor="green", alpha=0.1)
+    ax2.axhspan(filtered_df["Capital_before"].min(), 1000, facecolor="red", alpha=0.1)
+
+    for strategy in filtered_df["Strategy"].unique():
+        sub_df = filtered_df[filtered_df["Strategy"] == strategy]
+        ax2.plot(sub_df["Date"], sub_df["Capital_before"], label=strategy)
+
+    ax2.set_title(f"{strategy_prefix.upper().replace('_', ' ')}: 100% invested daily, no costs")
+    ax2.set_ylabel("Capital ($)")
+
+    # === LÉGENDE COMMUNE ===
+    handles, labels = ax2.get_legend_handles_labels()
+    labels = [c[:-5].replace("_", " ") for c in labels]
+    fig.legend(handles, labels, ncol=1, frameon=True, fontsize="small", loc="upper right")
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+
+    # === Sauvegarde ===
+    filename = f"plots/capital_plot_{strategy_prefix}.pdf"
+    plt.savefig(filename, dpi=300, bbox_inches="tight")
+    plt.show()
+
+
 # ----------------------------------------------------------------------------
 # Data loading helpers
 # ----------------------------------------------------------------------------
