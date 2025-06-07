@@ -55,7 +55,7 @@ def set_plot_style() -> None:
             "ytick.labelsize": 8,
             "figure.dpi": 300,
             "savefig.dpi": 300,
-            "figure.figsize": (12, 6),
+            "figure.figsize": (16, 9),
             "xtick.bottom": False,
             "ytick.left": False,
         }
@@ -95,7 +95,7 @@ set_plot_style()
 def plot_strategy_comparison(summary_df, strategy_prefix):
     fig = plt.figure()
 
-    # === SUBPLOT 1 — 50% Investissement (frac) ===
+    # === SUBPLOT 1 — 50% Investment (frac) ===
     ax1 = plt.subplot(2, 1, 1)
 
     filtered_df = summary_df.loc[
@@ -114,7 +114,7 @@ def plot_strategy_comparison(summary_df, strategy_prefix):
     ax1.set_ylabel("Capital ($)")
     ax1.tick_params(labelbottom=False)
 
-    # === SUBPLOT 2 — 100% Investissement (full) ===
+    # === SUBPLOT 2 — 100% Investment (full) ===
     ax2 = plt.subplot(2, 1, 2)
 
     filtered_df = summary_df.loc[
@@ -132,20 +132,20 @@ def plot_strategy_comparison(summary_df, strategy_prefix):
     ax2.set_title(f"{strategy_prefix.upper().replace('_', ' ')}: 100% invested daily, no costs")
     ax2.set_ylabel("Capital ($)")
 
-    # === LÉGENDE COMMUNE ===
+    # === Legend ===
     handles, labels = ax2.get_legend_handles_labels()
     labels = [c[:-5].replace("_", " ") for c in labels]
     fig.legend(handles, labels, ncol=1, frameon=True, fontsize="small", loc="upper right")
     plt.tight_layout(rect=[0, 0, 1, 0.95])
 
-    # === Sauvegarde ===
+    # === Save ===
     filename = f"plots/capital_plot_{strategy_prefix}.pdf"
     plt.savefig(filename, dpi=300, bbox_inches="tight")
     plt.show()
 
 
 # ----------------------------------------------------------------------------
-# Table and plot generation
+# Table and plot generation (for EDA)
 # ----------------------------------------------------------------------------
 
 
@@ -620,23 +620,23 @@ def compute_non_weighted_score_and_ratio_two_classes(
     pct_last=0.10,
 ):
     """
-    Pour chaque date, calcule :
-      1) score_day  = log-ratio non-pondéré (Bullish vs Bearish) sur TOUTES les lignes du jour.
-      2) score_last = log-ratio non-pondéré sur les pct_last derniers tweets du jour.
-      3) score_first= log-ratio non-pondéré sur les (1 - pct_last) premiers tweets.
-      4) ratio_last_over_first = score_last / score_first (NaN si score_first == 0 ou non calculable).
+    For each date, computes:
+      1) score_day  = unweighted log-ratio (Bullish vs Bearish) on ALL rows of the day.
+      2) score_last = unweighted log-ratio on the pct_last last tweets of the day.
+      3) score_first= unweighted log-ratio on the (1 - pct_last) first tweets.
+      4) ratio_last_over_first = score_last / score_first (NaN if score_first == 0 or not computable).
 
-    Retourne un DataFrame à colonnes :
+    Returns a DataFrame with columns:
        ['Date', score_day_col, ratio_col, 'nb_tweets']
 
-    Args :
-        df : DataFrame contenant au moins ['date', 'id', sentiment_col]
-        sentiment_col : nom de la colonne des labels (ex. “Bullish”/“Bearish”)
-        bullish, bearish : labels correspondant à sentiment “Bullish” et “Bearish”
-        score_day_col : nom à donner à la colonne du score global du jour
-        ratio_col : nom à donner à la colonne du ratio (last-over-first)
-        pct_last : fraction (entre 0 et 1) des tweets de fin de journée à utiliser pour score_last.
-                   Les (1 - pct_last) premiers tweets servent à score_first.
+    Args:
+        df : DataFrame containing at least ['date', 'id', sentiment_col]
+        sentiment_col : name of the label column (e.g. “Bullish”/“Bearish”)
+        bullish, bearish : labels corresponding to “Bullish” and “Bearish” sentiment
+        score_day_col : name to give to the column of the global daily score
+        ratio_col : name to give to the ratio column (last-over-first)
+        pct_last : fraction (between 0 and 1) of the day's tweets to use for score_last.
+                   The (1 - pct_last) first tweets are used for score_first.
     """
 
     results = []
@@ -644,23 +644,23 @@ def compute_non_weighted_score_and_ratio_two_classes(
     for date, group in df.groupby("date"):
         nb_tweets = len(group)
 
-        # 1) Calcul du score_journalier sur TOUTES les lignes du jour
+        # 1) Compute the daily score on ALL rows of the day
         pos_total = group[sentiment_col].value_counts().get(bullish, 0)
         neg_total = group[sentiment_col].value_counts().get(bearish, 0)
         score_day = np.log((1 + pos_total) / (1 + neg_total))
 
-        # 2) Tri chronologique pour découper en “first” vs “last”
+        # 2) Chronological sort to split into “first” vs “last”
         group_sorted = group.sort_values(by="id")
-        N = nb_tweets  # même chose que len(group_sorted)
+        N = nb_tweets  # same as len(group_sorted)
 
-        # Si aucun tweet ce jour-là, on renvoie NaN pour ratio
+        # If no tweet that day, return NaN for ratio
         if N == 0:
             results.append(
                 {"Date": date, score_day_col: score_day, ratio_col: np.nan, "nb_tweets": 0}
             )
             continue
 
-        # 3) Indice de coupure
+        # 3) Split index
         start_idx = math.floor(N * (1 - pct_last))
         if start_idx < 0:
             start_idx = 0
@@ -670,7 +670,7 @@ def compute_non_weighted_score_and_ratio_two_classes(
         sub_first = group_sorted.iloc[:start_idx]
         sub_last = group_sorted.iloc[start_idx:]
 
-        # 4) Score non-pondéré sur la “première” tranche
+        # 4) Unweighted score on the “first” slice
         if len(sub_first) > 0:
             pos_first = sub_first[sentiment_col].value_counts().get(bullish, 0)
             neg_first = sub_first[sentiment_col].value_counts().get(bearish, 0)
@@ -678,7 +678,7 @@ def compute_non_weighted_score_and_ratio_two_classes(
         else:
             score_first = np.nan
 
-        # 5) Score non-pondéré sur la “dernière” tranche
+        # 5) Unweighted score on the “last” slice
         if len(sub_last) > 0:
             pos_last = sub_last[sentiment_col].value_counts().get(bullish, 0)
             neg_last = sub_last[sentiment_col].value_counts().get(bearish, 0)
@@ -686,7 +686,7 @@ def compute_non_weighted_score_and_ratio_two_classes(
         else:
             score_last = np.nan
 
-        # 6) Ratio = score_last / score_first (si score_first non nul)
+        # 6) Ratio = score_last / score_first (if score_first is not zero)
         if (score_first is None) or (np.isnan(score_first)) or (score_first == 0):
             ratio = np.nan
         else:
@@ -710,38 +710,38 @@ def compute_weighted_score_and_ratio_two_classes(
     pct_last=0.10,
 ):
     """
-    Pour chaque date, calcule :
-      1) score_day  = log-ratio pondéré (likes) sur toutes les lignes du jour :
-            pos_total = somme des likes pour sentiment "bullish"
-            neg_total = somme des likes pour sentiment "bearish"
+    For each date, computes:
+      1) score_day  = weighted log-ratio (likes) on all rows of the day:
+            pos_total = sum of likes for "bullish" sentiment
+            neg_total = sum of likes for "bearish" sentiment
             score_day = log((1 + pos_total)/(1 + neg_total))
-      2) score_last  = idem, mais en ne gardant que les pct_last derniers tweets.
-      3) score_first = idem, sur les (1 - pct_last) premiers tweets.
-      4) ratio_last_over_first = score_last / score_first (NaN si impossible).
+      2) score_last  = same, but only on the pct_last last tweets.
+      3) score_first = same, on the (1 - pct_last) first tweets.
+      4) ratio_last_over_first = score_last / score_first (NaN if impossible).
 
-    Retourne un DataFrame à colonnes :
+    Returns a DataFrame with columns:
         ['Date', score_day_col, ratio_col, 'nb_tweets']
 
-    Args :
-        df : DataFrame contenant au minimum ['date', 'id', sentiment_col, like_col]
-        sentiment_col : nom de la colonne du label (Bullish/Bearish)
-        bullish, bearish : libellés pour bullish et bearish
-        like_col : nom de la colonne des poids (nombre de “likes” ou pondération)
-        score_day_col : nom de la colonne pour le score global du jour
-        ratio_col : nom de la colonne pour le ratio entre score_last et score_first
-        pct_last : fraction (0–1) des tweets finaux (dernier X %)
+    Args:
+        df : DataFrame containing at least ['date', 'id', sentiment_col, like_col]
+        sentiment_col : name of the label column (Bullish/Bearish)
+        bullish, bearish : labels for bullish and bearish
+        like_col : name of the weight column (number of “likes” or weighting)
+        score_day_col : name of the column for the global daily score
+        ratio_col : name of the column for the ratio between score_last and score_first
+        pct_last : fraction (0–1) of the final tweets (last X %)
     """
     results = []
 
     for date, group in df.groupby("date"):
         nb_tweets = len(group)
 
-        # 1) Score day (pondéré likes) sur TOUTES les lignes du jour
+        # 1) Score day (likes-weighted) on ALL rows of the day
         pos_total = group.loc[group[sentiment_col] == bullish, like_col].sum()
         neg_total = group.loc[group[sentiment_col] == bearish, like_col].sum()
         score_day = np.log((1 + pos_total) / (1 + neg_total))
 
-        # 2) Tri chronologique + découpage
+        # 2) Chronological sort + split
         group_sorted = group.sort_values(by="id")
         N = nb_tweets
         if N == 0:
@@ -759,7 +759,7 @@ def compute_weighted_score_and_ratio_two_classes(
         sub_first = group_sorted.iloc[:start_idx]
         sub_last = group_sorted.iloc[start_idx:]
 
-        # 3) Score pondéré sur la “première” tranche
+        # 3) Weighted score on the “first” slice
         if len(sub_first) > 0:
             pos_first = sub_first.loc[sub_first[sentiment_col] == bullish, like_col].sum()
             neg_first = sub_first.loc[sub_first[sentiment_col] == bearish, like_col].sum()
@@ -767,7 +767,7 @@ def compute_weighted_score_and_ratio_two_classes(
         else:
             score_first = np.nan
 
-        # 4) Score pondéré sur la “dernière” tranche
+        # 4) Weighted score on the “last” slice
         if len(sub_last) > 0:
             pos_last = sub_last.loc[sub_last[sentiment_col] == bullish, like_col].sum()
             neg_last = sub_last.loc[sub_last[sentiment_col] == bearish, like_col].sum()
@@ -800,32 +800,32 @@ def compute_weighted_score_and_ratio_three_classes(
     pct_last=0.10,
 ):
     """
-    Pour chaque date, calcule :
+    For each date, computes:
       1) score_day  = (pos_total - neg_total) / (pos_total + neg_total + neutral_total)
-           avec pos_total = somme des likes Bullish, neg_total = somme des likes Bearish,
-           neutral_total = somme des likes Neutral (sur TOUT le jour).
-      2) score_last  = même formule, mais sur les pct_last derniers tweets.
-      3) score_first = idem, sur les (1 - pct_last) premiers tweets.
-      4) ratio_last_over_first = score_last / score_first (NaN si score_first == 0 ou non calculable).
+           with pos_total = sum of likes Bullish, neg_total = sum of likes Bearish,
+           neutral_total = sum of likes Neutral (on the WHOLE day).
+      2) score_last  = same formula, but on the pct_last last tweets.
+      3) score_first = same, on the (1 - pct_last) first tweets.
+      4) ratio_last_over_first = score_last / score_first (NaN if score_first == 0 or not computable).
 
-    Retourne DataFrame à colonnes :
+    Returns DataFrame with columns:
       ['Date', score_day_col, ratio_col, 'nb_tweets']
 
-    Args :
-        df : DataFrame contenant ['date', 'id', sentiment_col, like_col]
-        sentiment_col : nom de la colonne de sentiment (Bullish/Bearish/Neutral)
-        bullish, bearish, neutral : labels pour chaque classe
-        like_col : nom de la colonne des poids (likes)
-        score_day_col : nom de la colonne pour le score global du jour
-        ratio_col : nom de la colonne pour le ratio (last_over_first)
-        pct_last : fraction (0–1) des tweets finaux à prendre pour score_last
+    Args:
+        df : DataFrame containing ['date', 'id', sentiment_col, like_col]
+        sentiment_col : name of the sentiment column (Bullish/Bearish/Neutral)
+        bullish, bearish, neutral : labels for each class
+        like_col : name of the weight column (likes)
+        score_day_col : name of the column for the global daily score
+        ratio_col : name of the column for the ratio (last_over_first)
+        pct_last : fraction (0–1) of the final tweets to take for score_last
     """
     results = []
 
     for date, group in df.groupby("date"):
         nb_tweets = len(group)
 
-        # 1) Score day (3 classes pondéré) sur TOUT le jour
+        # 1) Score day (3 classes weighted) on the WHOLE day
         pos_total = group.loc[group[sentiment_col] == bullish, like_col].sum()
         neg_total = group.loc[group[sentiment_col] == bearish, like_col].sum()
         neu_total = group.loc[group[sentiment_col] == neutral, like_col].sum()
@@ -835,7 +835,7 @@ def compute_weighted_score_and_ratio_three_classes(
         else:
             score_day = (pos_total - neg_total) / denom_total
 
-        # 2) Tri chronologique + découpage
+        # 2) Chronological sort + split
         group_sorted = group.sort_values(by="id")
         N = nb_tweets
         if N == 0:
@@ -853,7 +853,7 @@ def compute_weighted_score_and_ratio_three_classes(
         sub_first = group_sorted.iloc[:start_idx]
         sub_last = group_sorted.iloc[start_idx:]
 
-        # 3) Score (3 classes) sur la “première” tranche
+        # 3) Score (3 classes) on the “first” slice
         if len(sub_first) > 0:
             pos_first = sub_first.loc[sub_first[sentiment_col] == bullish, like_col].sum()
             neg_first = sub_first.loc[sub_first[sentiment_col] == bearish, like_col].sum()
@@ -866,7 +866,7 @@ def compute_weighted_score_and_ratio_three_classes(
         else:
             score_first = np.nan
 
-        # 4) Score (3 classes) sur la “dernière” tranche
+        # 4) Score (3 classes) on the “last” slice
         if len(sub_last) > 0:
             pos_last = sub_last.loc[sub_last[sentiment_col] == bullish, like_col].sum()
             neg_last = sub_last.loc[sub_last[sentiment_col] == bearish, like_col].sum()
