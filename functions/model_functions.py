@@ -17,6 +17,8 @@ from sklearn.model_selection import ParameterGrid
 from sklearn.preprocessing import RobustScaler, StandardScaler
 from sklearn.svm import SVC
 from xgboost import XGBClassifier
+from itertools import product
+from tqdm import tqdm
 import random
 
 
@@ -176,33 +178,6 @@ def evaluate_xgb_rolling_params(
     """
     Evaluate an XGBoost (rolling window) to predict the next day's variation (up/down),
     testing several combinations of hyperparameters.
-
-    Parameters:
-    - dataset                : DataFrame containing at least the columns date_col and close_col,
-                               as well as features (already sorted chronologically, ascending).
-    - date_col               : name of the Date column (datetime type or convertible).
-    - close_col              : name of the "close price" column (float).
-    - rolling_windows        : list of window sizes (in number of days).
-    - n_estimators_list      : list of n_estimators values to test.
-    - max_depth_list         : list of max_depth values to test.
-    - learning_rate_list     : list of learning_rate values to test.
-    - gamma_list             : list of gamma values to test.
-    - subsample_list         : list of subsample values to test.
-    - colsample_bytree_list  : list of colsample_bytree values to test.
-    - oversample             : if True, apply SMOTE to each training set.
-
-    Returns:
-    - results_df : DataFrame where each row corresponds to a combination
-                   (window_size, n_estimators, max_depth, learning_rate, gamma, subsample, colsample_bytree)
-                   and contains:
-       • accuracy
-       • f1_weighted
-       • precision_class_0, precision_class_1
-       • recall_class_0,    recall_class_1
-       • f1_class_0,        f1_class_1
-    - cm_dict    : dictionary where the key is the tuple
-                   (window_size, n_estimators, max_depth, learning_rate, gamma, subsample, colsample_bytree)
-                   and the value is the corresponding confusion matrix (2×2).
     """
 
     # Default values
@@ -223,26 +198,19 @@ def evaluate_xgb_rolling_params(
 
     # 1. Data preparation
     data = dataset.copy()
-
-    # Ensure the date column is datetime
     data[date_col] = pd.to_datetime(data[date_col])
-    # Ensure it is sorted in ascending order
     data = data.sort_values(by=date_col).reset_index(drop=True)
 
-    # 2. Target construction: label_next = 1 if Close_{t+1} >= Close_t, else 0
-    data["label_next"] = (data[close_col].shift(-1) >= data[close_col]).astype(int)
-    # Cannot predict for the last day, so remove it
+    # 2. Target construction
+    data = data.assign(label_next=(data[close_col].shift(-1) >= data[close_col]).astype(int))
     data = data.iloc[:-1].reset_index(drop=True)
 
-    # 3. Build the "full" X and y
-    #    Assume all columns except date_col and label_next are features.
+    # 3. Feature matrix and target
     feature_cols = [col for col in data.columns if col not in [date_col, "label_next"]]
     X_full = data[feature_cols].values
     y_full = data["label_next"].values
 
-    # 4. Prepare the hyperparameter grid
-    from itertools import product
-
+    # 4. Hyperparameter grid
     param_grid = list(
         product(
             rolling_windows,
@@ -258,7 +226,7 @@ def evaluate_xgb_rolling_params(
     records = []
     cm_dict = {}
 
-    # 5. Loop over each parameter combination
+    # 5. Loop through all parameter combinations
     for (
         window,
         n_estimators,
@@ -267,89 +235,86 @@ def evaluate_xgb_rolling_params(
         gamma,
         subsample,
         colsample_bytree,
-    ) in param_grid:
+    ) in tqdm(param_grid, desc="Grid Search XGBoost"):
 
         preds = []
         truths = []
 
-        # 5.a. For each t ≥ window, train on [t-window … t[ and test on t
-        for t in range(window, len(data)):
-            X_train = X_full[t - window : t]
-            y_train = y_full[t - window : t]
-            X_test = X_full[t].reshape(1, -1)
-            y_test = y_full[t]
+        try:
+            for t in range(window, len(data)):
+                X_train = X_full[t - window : t]
+                y_train = y_full[t - window : t]
+                X_test = X_full[t].reshape(1, -1)
+                y_test = y_full[t]
 
-            # 5.b. SMOTE if requested
-            if oversample:
-                smote = SMOTE(random_state=0)
-                X_train, y_train = smote.fit_resample(X_train, y_train)
+                if oversample:
+                    smote = SMOTE(random_state=0)
+                    X_train, y_train = smote.fit_resample(X_train, y_train)
 
-            # 5.c. Robust standardization
-            scaler = RobustScaler()
-            X_train = scaler.fit_transform(X_train)
-            X_test = scaler.transform(X_test)
+                scaler = RobustScaler()
+                X_train = scaler.fit_transform(X_train)
+                X_test = scaler.transform(X_test)
 
-            # 5.d. XGBClassifier initialization with current hyperparameters
-            clf = XGBClassifier(
-                n_estimators=n_estimators,
-                max_depth=max_depth,
-                learning_rate=learning_rate,
-                gamma=gamma,
-                subsample=subsample,
-                colsample_bytree=colsample_bytree,
-                use_label_encoder=False,
-                eval_metric="logloss",
-                random_state=0,
-                n_jobs=-1,
-            )
+                clf = XGBClassifier(
+                    n_estimators=n_estimators,
+                    max_depth=max_depth,
+                    learning_rate=learning_rate,
+                    gamma=gamma,
+                    subsample=subsample,
+                    colsample_bytree=colsample_bytree,
+                    use_label_encoder=False,
+                    eval_metric="logloss",
+                    random_state=0,
+                    n_jobs=-1,
+                )
 
-            # 5.e. Training and prediction
-            clf.fit(X_train, y_train)
-            pred = clf.predict(X_test)[0]
-            preds.append(pred)
-            truths.append(y_test)
+                clf.fit(X_train, y_train)
+                pred = clf.predict(X_test)[0]
+                preds.append(pred)
+                truths.append(y_test)
 
-        # 6. Compute metrics for this configuration
-        acc = accuracy_score(truths, preds)
-        prec_per_class = precision_score(truths, preds, average=None, zero_division=0)
-        rec_per_class = recall_score(truths, preds, average=None, zero_division=0)
-        f1_per_class = f1_score(truths, preds, average=None, zero_division=0)
-        f1_weighted = f1_score(truths, preds, average="weighted")
-        cm = confusion_matrix(truths, preds)
+            acc = accuracy_score(truths, preds)
+            prec_per_class = precision_score(truths, preds, average=None, zero_division=0)
+            rec_per_class = recall_score(truths, preds, average=None, zero_division=0)
+            f1_per_class = f1_score(truths, preds, average=None, zero_division=0)
+            f1_weighted = f1_score(truths, preds, average="weighted")
+            cm = confusion_matrix(truths, preds)
 
-        # 7. Store the result
-        record = {
-            "window_size": window,
-            "n_estimators": n_estimators,
-            "max_depth": max_depth,
-            "learning_rate": learning_rate,
-            "gamma": gamma,
-            "subsample": subsample,
-            "colsample_bytree": colsample_bytree,
-            "accuracy": acc,
-            "f1_weighted": f1_weighted,
-            "precision_class_0": prec_per_class[0],
-            "precision_class_1": prec_per_class[1],
-            "recall_class_0": rec_per_class[0],
-            "recall_class_1": rec_per_class[1],
-            "f1_class_0": f1_per_class[0],
-            "f1_class_1": f1_per_class[1],
-        }
+            record = {
+                "window_size": window,
+                "n_estimators": n_estimators,
+                "max_depth": max_depth,
+                "learning_rate": learning_rate,
+                "gamma": gamma,
+                "subsample": subsample,
+                "colsample_bytree": colsample_bytree,
+                "accuracy": acc,
+                "f1_weighted": f1_weighted,
+                "precision_class_0": prec_per_class[0],
+                "precision_class_1": prec_per_class[1],
+                "recall_class_0": rec_per_class[0],
+                "recall_class_1": rec_per_class[1],
+                "f1_class_0": f1_per_class[0],
+                "f1_class_1": f1_per_class[1],
+            }
 
-        records.append(record)
-        cm_dict[
-            (
-                window,
-                n_estimators,
-                max_depth,
-                learning_rate,
-                gamma,
-                subsample,
-                colsample_bytree,
-            )
-        ] = cm
+            records.append(record)
+            cm_dict[
+                (
+                    window,
+                    n_estimators,
+                    max_depth,
+                    learning_rate,
+                    gamma,
+                    subsample,
+                    colsample_bytree,
+                )
+            ] = cm
 
-    # 8. Construction du DataFrame final, trié sur f1_weighted décroissant
+        except Exception as e:
+            print(f"❌ Skipped config (win={window}, est={n_estimators}, depth={max_depth}): {e}")
+            continue
+
     results_df = pd.DataFrame.from_records(records)
     results_df = results_df.sort_values(by="f1_weighted", ascending=False).reset_index(drop=True)
 
