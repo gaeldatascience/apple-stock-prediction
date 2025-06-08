@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
+from IPython.display import display
 from torch.utils.data import DataLoader, TensorDataset
 from imblearn.over_sampling import SMOTE
 from sklearn.ensemble import BaggingClassifier
@@ -394,3 +395,161 @@ def rolling_lstm_pipeline_pytorch(
     df_results = pd.DataFrame(results)
     df_results = df_results.sort_values(by="f1_weighted", ascending=False).reset_index(drop=True)
     return df_results
+
+
+def rolling_lstm_pipeline_pytorch_eval_only(
+    features_df: pd.DataFrame,
+    window_sizes: list,
+    param_grid: dict,
+    device: str = "cpu",
+    seed: int = 42,
+) -> pd.DataFrame:
+    """
+    Rolling LSTM pipeline (PyTorch) to evaluate an untrained LSTM model
+    for different parameter combinations. No training is performed.
+    
+    Parameters:
+    - features_df   : DataFrame with at least the column "Close".
+    - window_sizes  : list of window sizes (integers).
+    - param_grid    : dictionary of hyperparameters to test (learning rate, batch size etc.).
+    - device        : "cpu" or "cuda".
+    - seed          : seed for reproducibility.
+    
+    Returns:
+    - df_results : DataFrame sorted by f1_weighted descending.
+    """
+    set_reproducible(seed)
+
+    df = features_df.copy().reset_index(drop=True)
+    df["label_next"] = (df["Close"].shift(-1) >= df["Close"]).astype(int)
+    df = df.iloc[:-1].reset_index(drop=True)
+
+    feature_cols = [col for col in df.columns if col != "label_next"]
+    X_full = df[feature_cols].values
+    y_full = df["label_next"].values
+
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X_full)
+
+    def build_dataset(X: np.ndarray, y: np.ndarray, window_size: int):
+        X_list, y_list = [], []
+        n_rows = X.shape[0]
+        for i in range(window_size, n_rows):
+            X_list.append(X[i - window_size : i, :])
+            y_list.append(y[i])
+        return np.array(X_list, dtype=np.float32), np.array(y_list, dtype=np.int64)
+
+    results = []
+
+    for window_size in window_sizes:
+        X_all, y_all = build_dataset(X_scaled, y_full, window_size)
+        if X_all.shape[0] == 0:
+            continue
+
+        X_test = torch.from_numpy(X_all).to(device)
+        y_test = torch.from_numpy(y_all).to(device).long()
+        n_features = X_all.shape[2]
+
+        for params in ParameterGrid(param_grid):
+            lstm_units = params["lstm_units"]
+            dropout = params.get("dropout", 0.0)
+            lr = params.get("learning_rate", 1e-3)
+            batch_size = params.get("batch_size", 32)
+            epochs = params.get("epochs", 10)
+            num_layers = params.get("num_layers", 1)
+
+            set_reproducible(seed)
+
+            model = LSTMClassifier(input_size=n_features, hidden_size=lstm_units, dropout=dropout)
+            if device.startswith("cuda"):
+                model = model.to(device)
+
+            model.eval()
+            with torch.no_grad():
+                logits_test = model(X_test)
+                preds = torch.argmax(logits_test, dim=1)
+                y_pred_np = preds.cpu().numpy().astype(int)
+                y_true_np = y_test.cpu().numpy().astype(int)
+
+            acc = accuracy_score(y_true_np, y_pred_np)
+            f1_w = f1_score(y_true_np, y_pred_np, average="weighted", zero_division=0)
+            recall_w = recall_score(y_true_np, y_pred_np, average="weighted", zero_division=0)
+            report = classification_report(
+                y_true_np, y_pred_np, digits=3, output_dict=True, zero_division=0
+            )
+
+            results.append(
+                {
+                    "window_size": window_size,
+                    "lstm_units": lstm_units,
+                    "dropout": dropout,
+                    "learning_rate": lr,
+                    "batch_size": batch_size,
+                    "epochs": epochs,
+                    "num_layers": num_layers,
+                    "accuracy": acc,
+                    "recall_weighted": recall_w,
+                    "f1_weighted": f1_w,
+                    "precision_0": report["0"]["precision"],
+                    "precision_1": report["1"]["precision"],
+                    "recall_0": report["0"]["recall"],
+                    "recall_1": report["1"]["recall"],
+                    "f1_0": report["0"]["f1-score"],
+                    "f1_1": report["1"]["f1-score"],
+                }
+            )
+
+            del model
+            if device.startswith("cuda"):
+                torch.cuda.empty_cache()
+
+    df_results = pd.DataFrame(results)
+    df_results = df_results.sort_values(by="f1_weighted", ascending=False).reset_index(drop=True)
+    return df_results
+
+def test_model(data_score_train, path:str=None, type="svm", scenario:int=None, use_bagging:bool=False):
+    from functions import compute_data_scenario
+    res = pd.read_parquet(path)
+    
+    if type == "svm":
+        window = int(res['window_size'][0])
+        C = res['C'][0]
+        res_test, cm_test = evaluate_svm_rolling_params(
+            dataset=compute_data_scenario(
+                data_score_train.tail(len(data_score_train)+window),
+                cols=globals()[f"cols_scenario_{scenario}"]),
+            date_col='Date',
+            close_col='Close',
+            rolling_windows=[window],
+            C_list=C,
+            svm_kernel='rbf',
+            svm_gamma='scale',
+            oversample=True,
+            use_bagging=use_bagging
+        )
+        res_test.to_parquet(f"results/res_svm_scenario_{scenario}_test.pq")
+        display(res_test.head())
+        print(f"Accuracy on test set: {res_test['accuracy'].values[0]:.2%}")
+        
+    if type == "lstm":
+        param_grid_lstm = {
+            "lstm_units":    [res['lstm_units'][0]], 
+            "dropout":       [res['dropout'][0]],  
+            "learning_rate": [res['learning_rate'][0]],  
+            "batch_size":    [16],       
+            "epochs":        [50],
+        }
+        window = int(res['window_size'][0])
+        res_test, cm_test = rolling_lstm_pipeline_pytorch_eval_only(
+            features_df=compute_data_scenario(
+                data_score_train.tail(len(data_score_train)+window),
+                cols=globals()[f"cols_scenario_{scenario}"]),
+            device="cpu",
+            seed=6,
+            window_sizes=[window],
+            param_grid=param_grid_lstm,
+
+        )
+        res_test.to_parquet(f"results/res_lstm_scenario_{scenario}_test.pq")
+        display(res_test.head())
+        print(f"Accuracy on test set: {res_test['accuracy'].values[0]:.2%}")
