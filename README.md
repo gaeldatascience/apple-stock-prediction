@@ -58,11 +58,11 @@ uv pip install -r requirements.txt     # or: pip install -e .
 
 | File | Purpose |
 |------|---------|
-| `scripts/01_fetch_stocktwits.py` | Extract and cache StockTwits messages & likes count |
-| `scripts/02_compute_sentiment.py` | Apply VADER, FinBERT, RoBERTa to raw texts |
-| `scripts/train_svm.py` / `scripts/train_lstm.py` | Walk-forward grid-search / PyTorch training |
-| `scripts/backtest.py` | Long/short back-tester with variable leverage & fees |
-| `scripts/report.py` | Export tables & visualisations used in the thesis |
+| `scripts/data_collection.py` | Download historical OHLCV data via Yahoo Finance (`yfinance`), aggregate raw StockTwits parquet files into a single DataFrame (`data/tweets_aggregated.pq`) |
+| `scripts/compute_sentiment_analysis.py` | Clean tweet text, extract and transform like‐counts, and compute sentiment labels using base keyword mapping, VADER, FinBERT, and a StockTwits-fine-tuned RoBERTa |
+| `scripts/model_functions.py` | Define and evaluate SVM (with optional bagging/SMOTE) and PyTorch LSTM classifiers; implements rolling-window grid search, metrics computation, and test routines |
+| `scripts/trading.py` | Simulate long/short trading strategies for both SVM and LSTM models, with adjustable window sizes, investment fraction, and transaction costs |
+
 
 ---
 
