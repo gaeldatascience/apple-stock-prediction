@@ -72,6 +72,17 @@ The full methodology (feature engineering, SMOTE balancing, walk-forward validat
 
 ---
 
+## Abstract
+
+This article examines the extent to which integrating sentiment signals extracted from the StockTwits platform can improve daily predictions of Apple Inc. (AAPL) stock price movements. The dataset combines 543 stock market observations (closing price, volume, volatility) and approximately 915,000 StockTwits messages related to AAPL for the period December 31, 2019, to February 27, 2022. Four sentiment analysis methods are used: “Bullish/Bearish” auto-annotations, VADER, FinBERT, and a RoBERTa model fine-tuned to StockTwits. Scores are aggregated on a daily basis and weighted by message popularity.
+Five modeling scenarios—from a simple “price only” model to “price + sentiment” combinations—are evaluated with three algorithms: SVM, Ensemble SVM (bagging of five SVMs), and LSTM network. The hyperparameters of the SVMs are optimized using sliding walk-forward, while the LSTM is trained on 70% of the data and then tested chronologically on the remaining 30%. Class imbalance is corrected using SMOTE. Performance is measured using the weighted F1 score.
+
+The results show the systematic superiority of LSTM (average F1 = 57.06%) over the SVM ensemble (55.84%) and the simple SVM (54.53%). The best score is achieved with the combination of LSTM + VADER (F1 = 59.91%, +2.7 points compared to the price-only model). An out-ofsample simulation (July 7, 2021 to February 24, 2022) illustrates the economic value of these signals: by investing all capital without transaction costs, the LSTM + FinBERT strategy increases initial capital from $1,000 to $2,115 (+111.5%), more than 100 percentage points better than a simple buy-and-hold approach, which only achieves +11.2%. LSTM + VADER achieves +36.9% over the period. Simple SVMs, which lack sequential memory, remain significantly in deficit.
+
+These results highlight the tangible contribution of sentiment indicators and the relevance of deep learning models for capturing the psychological dynamics of markets. However, the limitations associated with the uniqueness of the asset and the daily horizon suggest that the approach should be extended to other securities, intraday granularities, and multi-asset architectures.
+
+---
+
 ## 📄 License & citation
 
 This repository is released under the **MIT License**; see [`LICENSE`](./LICENSE).  
