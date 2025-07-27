@@ -7,6 +7,12 @@ The code accompanies our master-thesis *“Can Sentiment Analysis Improve the Pr
 
 ## Executive summary
 
+To evaluate the predictive power and economic value of sentiment-enriched models, we simulate a **daily long/short strategy**: each trading day, the model forecasts the direction of Apple Inc.’s stock price for the next session.  
+A **fully invested position (100 % exposure)** is taken according to the signal — **long** if the model predicts an increase, **short** otherwise.  
+Transaction costs are set to zero to isolate pure model performance.
+
+The table below reports the **weighted F1-score** (a class-balanced performance metric) and the **cumulative return** of each model-strategy pair during the out-of-sample period:
+
 | Model | Scenario | Weighted F1 | Out-of-sample capital *(100 % exposure, 0 % fees)* |
 |-------|----------|-------------|----------------------------------------------------|
 | **LSTM + VADER** | Price + VADER | **0.599** | +36.9 % |
@@ -14,14 +20,17 @@ The code accompanies our master-thesis *“Can Sentiment Analysis Improve the Pr
 | Ensemble SVM + RoBERTa | Price + RoBERTa | 0.567 | +19.1 % |
 | Buy-&-hold | – | – | +11.2 % |
 
-The LSTM architecture consistently tops SVM baselines; sentiment features add up to **+3 F1 points** over price-only inputs and translate into sizeable paper-trading gains.
+These results highlight the added value of sentiment indicators: LSTM models enriched with VADER or FinBERT sentiment extracted from StockTwits consistently outperform price-only baselines and the buy-and-hold benchmark — both in terms of classification performance and capital appreciation.
 
-Model hyperparameters were selected using data from December 31, 2019 to July 6, 2021, which corresponds to the first 70 % of the dataset.  
+### Experimental protocol
 
-- For **LSTM**, this period was also used to train the final model, which was then tested chronologically on the remaining 30 % (no re-training).
-- For **SVMs**, only hyperparameters were tuned during this period. The model was re-trained daily on a rolling window and used to predict the next day (walk-forward approach).
+- The **training and hyperparameter tuning period** spans **December 31, 2019 to July 6, 2021**, which corresponds to the first **70 % of the dataset** (382 trading days).
+  
+- For **LSTM models**, this period is used both for hyperparameter selection and model training. The resulting architecture is then evaluated chronologically on the remaining **30 %** (161 trading days), with **no re-training** or peeking into future data.
 
-The out-of-sample test period spans **July 7, 2021 to February 24, 2022** (161 trading days).
+- For **SVM and Ensemble SVM models**, only hyperparameters are tuned during the training phase. The models are then **retrained daily** on a rolling window and tested in a **walk-forward fashion**, using past data only.
+
+The **out-of-sample evaluation window** runs from **July 7, 2021 to February 24, 2022**, covering **161 consecutive trading days**.
 
 ---
 
