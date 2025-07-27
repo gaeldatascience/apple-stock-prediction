@@ -16,7 +16,13 @@ The code accompanies our master-thesis *“Can Sentiment Analysis Improve the Pr
 
 The LSTM architecture consistently tops SVM baselines; sentiment features add up to **+3 F1 points** over price-only inputs and translate into sizeable paper-trading gains.
 
-> **Evaluation period:** Models were trained on data from December 31, 2019 to July 6, 2021. The out-of-sample test period spans July 7, 2021 to February 24, 2022 (161 trading days).
+Model hyperparameters were selected using data from December 31, 2019 to July 6, 2021,  
+which corresponds to the first 70 % of the dataset.  
+
+- For **LSTM**, this period was also used to train the final model, which was then tested chronologically on the remaining 30 % (no re-training).
+- For **SVMs**, only hyperparameters were tuned during this period. The model was re-trained daily on a rolling window and used to predict the next day (walk-forward approach).
+
+The out-of-sample test period spans **July 7, 2021 to February 24, 2022** (161 trading days).
 
 ---
 
