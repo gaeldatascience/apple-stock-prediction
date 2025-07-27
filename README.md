@@ -20,7 +20,7 @@ The table below reports the **weighted F1-score** (a class-balanced performance 
 | Ensemble SVM + RoBERTa | Price + RoBERTa | 0.567 | +19.1 % |
 | Buy-&-hold | – | – | +11.2 % |
 
-These results highlight the added value of sentiment indicators: LSTM models enriched with VADER or FinBERT sentiment extracted from StockTwits consistently outperform price-only baselines and the buy-and-hold benchmark — both in terms of classification performance and capital appreciation.
+These results highlight the added value of sentiment indicators: LSTM models enriched with VADER or FinBERT sentiment consistently outperform price-only baselines and the buy-and-hold benchmark — both in terms of classification performance and capital appreciation.
 
 ### Experimental protocol
 
