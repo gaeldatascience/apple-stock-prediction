@@ -21,13 +21,13 @@ from scipy.stats import ttest_ind
 
 
 def set_plot_style() -> None:
-    """Configure global aesthetics for *matplotlib* and *plotly* figures.
+    """
+    Configures global aesthetics for matplotlib and plotly figures.
 
-    This helper applies a white theme, soft grid lines, and sensible font sizes
-    so that every figure produced afterwards automatically follows the same
-    visual guidelines.  In addition, it registers a *draw_event* callback that
-    formats both axes tick‐labels into human‑readable millions (``M``) and
-    billions (``B``).
+    Applies a white theme, soft grid lines, and sensible font sizes so that all subsequent figures follow the same visual guidelines. Also registers a draw_event callback to format axis tick labels into human-readable millions (M) and billions (B).
+
+    Returns:
+        None
     """
 
     # Set the default *plotly* template
@@ -93,6 +93,16 @@ set_plot_style()
 
 
 def plot_strategy_comparison(summary_df, strategy_prefix):
+    """
+    Plots a comparison of investment strategies for 50% and 100% daily investment.
+
+    Args:
+        summary_df (pd.DataFrame): DataFrame containing strategy results.
+        strategy_prefix (str): Prefix to filter strategies.
+
+    Returns:
+        None
+    """
     fig = plt.figure()
 
     # === SUBPLOT 1 — 50% Investment (frac) ===
@@ -152,6 +162,16 @@ def plot_strategy_comparison(summary_df, strategy_prefix):
 def generate_message_statistics(
     tweets: pd.DataFrame, output_path: str = "tab/tbl_msg_stats.tex"
 ) -> pd.DataFrame:
+    """
+    Generates summary statistics for tweet messages and exports a LaTeX table.
+
+    Args:
+        tweets (pd.DataFrame): DataFrame containing tweet data.
+        output_path (str): Path to export the LaTeX table.
+
+    Returns:
+        pd.DataFrame: Summary statistics table.
+    """
     # Normalize and enrich
     tweets = tweets.copy()
     tweets["date"] = pd.to_datetime(tweets["date"]).dt.normalize()
@@ -211,7 +231,15 @@ def generate_message_statistics(
 
 
 def clean_wordcloud(text: str) -> str:
-    """Clean a text for word cloud visualization."""
+    """
+    Cleans a text string for word cloud visualization.
+
+    Args:
+        text (str): Input text.
+
+    Returns:
+        str: Cleaned text.
+    """
     text = text.lower().replace("$", "")
     text = re.sub(r"[,.?!;]", " ", text)
 
@@ -234,7 +262,17 @@ def generate_wordclouds(
     output_path: str = "plots/wordclouds.pdf",
 ):
     """
-    Generate word clouds for all, bullish, and bearish messages.
+    Generates word clouds for all, bullish, and bearish messages.
+
+    Args:
+        df (pd.DataFrame): DataFrame containing messages.
+        text_col (str): Name of the text column.
+        sentiment_col (str): Name of the sentiment column.
+        font_path (str): Path to font file.
+        output_path (str): Path to save the word cloud PDF.
+
+    Returns:
+        None
     """
     # Clean all text in advance
     df = df.copy()
@@ -274,20 +312,15 @@ def generate_sentiment_summary(
     output_path: str = "tab/tbl_sentiment_summary.tex",
 ) -> pd.DataFrame:
     """
-    Generate a summary table with counts and percentages of sentiment labels
-    for each sentiment analysis method in the DataFrame.
+    Generates a summary table with counts and percentages of sentiment labels for each sentiment analysis method.
 
-    Parameters:
-    - df : pd.DataFrame
-        The input DataFrame containing sentiment columns.
-    - sentiment_prefix : str
-        The prefix to identify sentiment columns (default: 'sentiment_').
-    - output_path : str
-        Path to export the LaTeX table.
+    Args:
+        df (pd.DataFrame): Input DataFrame containing sentiment columns.
+        sentiment_prefix (str): Prefix to identify sentiment columns.
+        output_path (str): Path to export the LaTeX table.
 
     Returns:
-    - pd.DataFrame
-        Summary DataFrame with absolute counts and percentages.
+        pd.DataFrame: Summary DataFrame with counts and percentages.
     """
     sentiment_cols = [col for col in df.columns if col.startswith(sentiment_prefix)]
     summary = {}
@@ -330,21 +363,18 @@ def plot_smoothed_sentiment_scores(
     output_path: str = "plots/smoothed_sentiment_scores.pdf",
 ) -> None:
     """
-    Plot smoothed sentiment scores (with rolling average) on independent Y-scales.
+    Plots smoothed sentiment scores (rolling average) on independent Y-scales.
 
-    Parameters:
-    - df : pd.DataFrame
-        DataFrame containing date column and sentiment score columns.
-    - score_cols : list of str
-        Names of the sentiment score columns to plot.
-    - custom_labels : list of str
-        Display labels corresponding to score_cols (same order).
-    - date_col : str
-        Name of the date column (default: 'Date').
-    - window_size : int
-        Rolling window size for smoothing (default: 7).
-    - output_path : str
-        File path where to save the figure (PDF format).
+    Args:
+        df (pd.DataFrame): DataFrame containing date and sentiment score columns.
+        score_cols (list): List of sentiment score column names.
+        custom_labels (list): Display labels for each score column.
+        date_col (str): Name of the date column.
+        window_size (int): Rolling window size for smoothing.
+        output_path (str): Path to save the figure (PDF).
+
+    Returns:
+        None
     """
     palette = sns.color_palette("muted", len(score_cols))
     fig, ax_main = plt.subplots(figsize=(12, 6))
@@ -389,23 +419,19 @@ def plot_sentiment_and_price(
     output_path: str = "plots/sentiment_scores_with_close_price.pdf",
 ) -> None:
     """
-    Plot Close price and smoothed sentiment scores with independent Y-scales.
+    Plots Close price and smoothed sentiment scores with independent Y-scales.
 
-    Parameters:
-    - df : pd.DataFrame
-        DataFrame containing sentiment scores and a price column.
-    - score_cols : list of str
-        Names of sentiment score columns.
-    - custom_labels : list of str
-        Display labels for each sentiment score column.
-    - price_col : str
-        Name of the closing price column (default: 'Close').
-    - date_col : str
-        Name of the date column (default: 'Date').
-    - window_size : int
-        Rolling average window size (default: 7).
-    - output_path : str
-        Path to save the plot as PDF.
+    Args:
+        df (pd.DataFrame): DataFrame containing sentiment scores and price column.
+        score_cols (list): List of sentiment score column names.
+        custom_labels (list): Display labels for each score column.
+        price_col (str): Name of the closing price column.
+        date_col (str): Name of the date column.
+        window_size (int): Rolling average window size.
+        output_path (str): Path to save the plot (PDF).
+
+    Returns:
+        None
     """
     palette = sns.color_palette("muted", len(score_cols))
     fig, ax_main = plt.subplots(figsize=(12, 6))
@@ -452,22 +478,17 @@ def ttest_sentiment_scores_by_direction(
     output_path: str = "tab/tbl_sentiment_scores_ttest.tex",
 ) -> pd.DataFrame:
     """
-    Perform t-tests comparing sentiment scores between 'Up' and 'Down' days.
+    Performs t-tests comparing sentiment scores between 'Up' and 'Down' days.
 
-    Parameters:
-    - df : pd.DataFrame
-        DataFrame with sentiment scores and closing prices.
-    - score_cols : list of str
-        List of column names for sentiment scores.
-    - custom_labels : list of str
-        Display labels for those scores (same order).
-    - price_col : str
-        Name of the column with closing prices (default: 'Close').
-    - output_path : str
-        File path for saving LaTeX table of results.
+    Args:
+        df (pd.DataFrame): DataFrame with sentiment scores and closing prices.
+        score_cols (list): List of sentiment score column names.
+        custom_labels (list): Display labels for each score column.
+        price_col (str): Name of the closing price column.
+        output_path (str): Path to save the LaTeX table.
 
     Returns:
-    - pd.DataFrame with t-statistics and p-values.
+        pd.DataFrame: DataFrame with t-statistics and p-values.
     """
     data = df.copy()
     data["Close_t+1"] = data[price_col].shift(-1)
@@ -507,19 +528,17 @@ def plot_sentiment_by_price_direction(
     output_path: str = "plots/sentiment_scores_by_next_day_price_direction.pdf",
 ) -> None:
     """
-    Plot faceted boxplots of sentiment scores grouped by the next day's price direction.
+    Plots faceted boxplots of sentiment scores grouped by the next day's price direction.
 
-    Parameters:
-    - df : pd.DataFrame
-        The input DataFrame containing sentiment scores and price data.
-    - score_cols : list of str
-        The names of the sentiment score columns.
-    - custom_labels : list of str
-        Readable names for each score method (same order as score_cols).
-    - price_col : str
-        The name of the closing price column (default: 'Close').
-    - output_path : str
-        File path to save the resulting plot as PDF.
+    Args:
+        df (pd.DataFrame): DataFrame containing sentiment scores and price data.
+        score_cols (list): List of sentiment score column names.
+        custom_labels (list): Readable names for each score method.
+        price_col (str): Name of the closing price column.
+        output_path (str): Path to save the plot (PDF).
+
+    Returns:
+        None
     """
     data = df.copy()
     data["Close_t+1"] = data[price_col].shift(-1)
@@ -568,13 +587,16 @@ def plot_sentiment_by_price_direction(
 
 
 def import_and_preprocess_data_stock(symbol: str = "AAPL") -> pd.DataFrame:
-    """Load stock data for a given symbol from a Parquet file and engineer basic features.
+    """
+    Loads stock data for a given symbol from a Parquet file and engineers basic features.
 
-    Drops the redundant index column if present, then computes intra-day volatility, simple daily return, and its log-transformed counterpart (log-return).
+    Drops the redundant index column if present, then computes intra-day volatility, simple daily return, and log-return.
+
     Args:
-        symbol: Stock ticker symbol (default is 'AAPL').
+        symbol (str): Stock ticker symbol.
+
     Returns:
-        DataFrame with engineered features.
+        pd.DataFrame: DataFrame with engineered features.
     """
 
     data = pd.read_parquet(f"data/{symbol}_data.pq")
@@ -590,11 +612,13 @@ def import_and_preprocess_data_stock(symbol: str = "AAPL") -> pd.DataFrame:
 
 
 def import_and_preprocess_data_tweets() -> pd.DataFrame:
-    """Load aggregated tweet sentiment data and standardize the date column.
+    """
+    Loads aggregated tweet sentiment data and standardizes the date column.
 
     Reads the aggregated tweets parquet file, harmonizes the date format, and renames the date column for consistency with stock data.
+
     Returns:
-        DataFrame with standardized date column.
+        pd.DataFrame: DataFrame with standardized date column.
     """
 
     data = pd.read_parquet("data/tweets_aggregated.pq")
@@ -620,23 +644,25 @@ def compute_non_weighted_score_and_ratio_two_classes(
     pct_last=0.10,
 ):
     """
-    For each date, computes:
-      1) score_day  = unweighted log-ratio (Bullish vs Bearish) on ALL rows of the day.
-      2) score_last = unweighted log-ratio on the pct_last last tweets of the day.
-      3) score_first= unweighted log-ratio on the (1 - pct_last) first tweets.
-      4) ratio_last_over_first = score_last / score_first (NaN if score_first == 0 or not computable).
+    Computes unweighted log-ratio sentiment scores for two classes (Bullish/Bearish) per day.
 
-    Returns a DataFrame with columns:
-       ['Date', score_day_col, ratio_col, 'nb_tweets']
+    For each date, computes:
+        1) score_day: unweighted log-ratio (Bullish vs Bearish) on all rows of the day.
+        2) score_last: unweighted log-ratio on the pct_last last tweets of the day.
+        3) score_first: unweighted log-ratio on the (1 - pct_last) first tweets.
+        4) ratio_last_over_first: score_last / score_first (NaN if score_first == 0 or not computable).
 
     Args:
-        df : DataFrame containing at least ['date', 'id', sentiment_col]
-        sentiment_col : name of the label column (e.g. “Bullish”/“Bearish”)
-        bullish, bearish : labels corresponding to “Bullish” and “Bearish” sentiment
-        score_day_col : name to give to the column of the global daily score
-        ratio_col : name to give to the ratio column (last-over-first)
-        pct_last : fraction (between 0 and 1) of the day's tweets to use for score_last.
-                   The (1 - pct_last) first tweets are used for score_first.
+        df (pd.DataFrame): DataFrame containing at least ['date', 'id', sentiment_col].
+        sentiment_col (str): Name of the label column.
+        bullish (str): Label for bullish sentiment.
+        bearish (str): Label for bearish sentiment.
+        score_day_col (str): Name for the global daily score column.
+        ratio_col (str): Name for the ratio column (last-over-first).
+        pct_last (float): Fraction (0–1) of the day's tweets to use for score_last.
+
+    Returns:
+        pd.DataFrame: DataFrame with columns ['Date', score_day_col, ratio_col, 'nb_tweets'].
     """
 
     results = []
@@ -710,26 +736,26 @@ def compute_weighted_score_and_ratio_two_classes(
     pct_last=0.10,
 ):
     """
-    For each date, computes:
-      1) score_day  = weighted log-ratio (likes) on all rows of the day:
-            pos_total = sum of likes for "bullish" sentiment
-            neg_total = sum of likes for "bearish" sentiment
-            score_day = log((1 + pos_total)/(1 + neg_total))
-      2) score_last  = same, but only on the pct_last last tweets.
-      3) score_first = same, on the (1 - pct_last) first tweets.
-      4) ratio_last_over_first = score_last / score_first (NaN if impossible).
+    Computes weighted log-ratio sentiment scores for two classes (Bullish/Bearish) per day using likes as weights.
 
-    Returns a DataFrame with columns:
-        ['Date', score_day_col, ratio_col, 'nb_tweets']
+    For each date, computes:
+        1) score_day: weighted log-ratio (likes) on all rows of the day.
+        2) score_last: same, but only on the pct_last last tweets.
+        3) score_first: same, on the (1 - pct_last) first tweets.
+        4) ratio_last_over_first: score_last / score_first (NaN if impossible).
 
     Args:
-        df : DataFrame containing at least ['date', 'id', sentiment_col, like_col]
-        sentiment_col : name of the label column (Bullish/Bearish)
-        bullish, bearish : labels for bullish and bearish
-        like_col : name of the weight column (number of “likes” or weighting)
-        score_day_col : name of the column for the global daily score
-        ratio_col : name of the column for the ratio between score_last and score_first
-        pct_last : fraction (0–1) of the final tweets (last X %)
+        df (pd.DataFrame): DataFrame containing at least ['date', 'id', sentiment_col, like_col].
+        sentiment_col (str): Name of the label column.
+        bullish (str): Label for bullish sentiment.
+        bearish (str): Label for bearish sentiment.
+        like_col (str): Name of the weight column (number of likes).
+        score_day_col (str): Name for the global daily score column.
+        ratio_col (str): Name for the ratio column (last-over-first).
+        pct_last (float): Fraction (0–1) of the final tweets to use for score_last.
+
+    Returns:
+        pd.DataFrame: DataFrame with columns ['Date', score_day_col, ratio_col, 'nb_tweets'].
     """
     results = []
 
@@ -800,25 +826,27 @@ def compute_weighted_score_and_ratio_three_classes(
     pct_last=0.10,
 ):
     """
-    For each date, computes:
-      1) score_day  = (pos_total - neg_total) / (pos_total + neg_total + neutral_total)
-           with pos_total = sum of likes Bullish, neg_total = sum of likes Bearish,
-           neutral_total = sum of likes Neutral (on the WHOLE day).
-      2) score_last  = same formula, but on the pct_last last tweets.
-      3) score_first = same, on the (1 - pct_last) first tweets.
-      4) ratio_last_over_first = score_last / score_first (NaN if score_first == 0 or not computable).
+    Computes weighted sentiment scores for three classes (Bullish/Bearish/Neutral) per day using likes as weights.
 
-    Returns DataFrame with columns:
-      ['Date', score_day_col, ratio_col, 'nb_tweets']
+    For each date, computes:
+        1) score_day: (pos_total - neg_total) / (pos_total + neg_total + neutral_total) on the whole day.
+        2) score_last: same formula, but on the pct_last last tweets.
+        3) score_first: same, on the (1 - pct_last) first tweets.
+        4) ratio_last_over_first: score_last / score_first (NaN if score_first == 0 or not computable).
 
     Args:
-        df : DataFrame containing ['date', 'id', sentiment_col, like_col]
-        sentiment_col : name of the sentiment column (Bullish/Bearish/Neutral)
-        bullish, bearish, neutral : labels for each class
-        like_col : name of the weight column (likes)
-        score_day_col : name of the column for the global daily score
-        ratio_col : name of the column for the ratio (last_over_first)
-        pct_last : fraction (0–1) of the final tweets to take for score_last
+        df (pd.DataFrame): DataFrame containing ['date', 'id', sentiment_col, like_col].
+        sentiment_col (str): Name of the sentiment column.
+        bullish (str): Label for bullish sentiment.
+        bearish (str): Label for bearish sentiment.
+        neutral (str): Label for neutral sentiment.
+        like_col (str): Name of the weight column (likes).
+        score_day_col (str): Name for the global daily score column.
+        ratio_col (str): Name for the ratio column (last-over-first).
+        pct_last (float): Fraction (0–1) of the final tweets to use for score_last.
+
+    Returns:
+        pd.DataFrame: DataFrame with columns ['Date', score_day_col, ratio_col, 'nb_tweets'].
     """
     results = []
 
@@ -893,13 +921,15 @@ def compute_weighted_score_and_ratio_three_classes(
 
 
 def compute_data_scenario(df, cols: list = None, date_col: str = "Date") -> pd.DataFrame:
-    """Extract selected columns and the date column from a DataFrame, dropping incomplete rows.
+    """
+    Extracts selected columns and the date column from a DataFrame, dropping incomplete rows.
 
     Args:
-        df: Source DataFrame.
-        cols: List of columns to keep (in addition to the date column).
-        date_col: Name of the date column.
+        df (pd.DataFrame): Source DataFrame.
+        cols (list): List of columns to keep (in addition to the date column).
+        date_col (str): Name of the date column.
+
     Returns:
-        Filtered DataFrame with only the requested columns and no missing values.
+        pd.DataFrame: Filtered DataFrame with only the requested columns and no missing values.
     """
     return df[[date_col] + cols].dropna()
