@@ -7,6 +7,12 @@ The code accompanies our master-thesis *The Contribution of Sentiment Analysis t
 
 ## Executive summary
 
+To evaluate the predictive power and economic value of sentiment-enriched models, we simulate a **daily long/short strategy**: each trading day, the model forecasts the direction of Apple Inc.’s stock price for the next session.  
+A **fully invested position (100 % exposure)** is taken according to the signal — **long** if the model predicts an increase, **short** otherwise.  
+Transaction costs are set to zero to isolate pure model performance.
+
+The table below reports the **weighted F1-score** (a class-balanced performance metric) and the **cumulative return** of each model-strategy pair during the out-of-sample period:
+
 | Model | Scenario | Weighted F1 | Out-of-sample capital *(100 % exposure, 0 % fees)* |
 |-------|----------|-------------|----------------------------------------------------|
 | **LSTM + VADER** | Price + VADER | **0.599** | +36.9 % |
@@ -14,7 +20,17 @@ The code accompanies our master-thesis *The Contribution of Sentiment Analysis t
 | Ensemble SVM + RoBERTa | Price + RoBERTa | 0.567 | +19.1 % |
 | Buy-&-hold | – | – | +11.2 % |
 
-The LSTM architecture consistently tops SVM baselines; sentiment features add up to **+3 F1 points** over price-only inputs and translate into sizeable paper-trading gains.
+These results highlight the added value of sentiment indicators: LSTM models enriched with VADER or FinBERT sentiment consistently outperform price-only baselines and the buy-and-hold benchmark — both in terms of classification performance and capital appreciation.
+
+### Experimental protocol
+
+- The **training and hyperparameter tuning period** spans **December 31, 2019 to July 6, 2021**, which corresponds to the first **70 % of the dataset** (382 trading days).
+  
+- For **LSTM models**, this period is used both for hyperparameter selection and model training. The resulting architecture is then evaluated chronologically on the remaining **30 %** (161 trading days), with **no re-training** or peeking into future data.
+
+- For **SVM and Ensemble SVM models**, only hyperparameters are tuned during the training phase. The models are then **retrained daily** on a rolling window and tested in a **walk-forward fashion**, using past data only.
+
+The **out-of-sample evaluation window** runs from **July 7, 2021 to February 24, 2022**, covering **161 consecutive trading days**.
 
 ---
 
@@ -74,7 +90,7 @@ The full methodology (feature engineering, SMOTE balancing, walk-forward validat
 
 ## Abstract
 
-This article examines the extent to which integrating sentiment signals extracted from the StockTwits platform can improve daily predictions of Apple Inc. (AAPL) stock price movements. The dataset combines 543 stock market observations (closing price, volume, volatility) and approximately 915,000 StockTwits messages related to AAPL for the period December 31, 2019, to February 27, 2022. Four sentiment analysis methods are used: “Bullish/Bearish” auto-annotations, VADER, FinBERT, and a RoBERTa model fine-tuned to StockTwits. Scores are aggregated on a daily basis and weighted by message popularity.
+This article examines the extent to which integrating sentiment signals extracted from the StockTwits platform can improve daily predictions of Apple Inc. (AAPL) stock price movements. The dataset combines 543 stock market observations (closing price, volume, volatility) and approximately 915,000 StockTwits messages related to AAPL for the period December 31, 2019, to February 27, 2022. Four sentiment analysis methods are used: “Bullish/Bearish” self-annotations, VADER, FinBERT, and a RoBERTa model fine-tuned to StockTwits. Scores are aggregated on a daily basis and weighted by message popularity.
 Five modeling scenarios—from a simple “price only” model to “price + sentiment” combinations—are evaluated with three algorithms: SVM, Ensemble SVM (bagging of five SVMs), and LSTM network. The hyperparameters of the SVMs are optimized using sliding walk-forward, while the LSTM is trained on 70% of the data and then tested chronologically on the remaining 30%. Class imbalance is corrected using SMOTE. Performance is measured using the weighted F1 score.
 
 The results show the systematic superiority of LSTM (average F1 = 57.06%) over the SVM ensemble (55.84%) and the simple SVM (54.53%). The best score is achieved with the combination of LSTM + VADER (F1 = 59.91%, +2.7 points compared to the price-only model). An out-ofsample simulation (July 7, 2021 to February 24, 2022) illustrates the economic value of these signals: by investing all capital without transaction costs, the LSTM + FinBERT strategy increases initial capital from $1,000 to $2,115 (+111.5%), more than 100 percentage points better than a simple buy-and-hold approach, which only achieves +11.2%. LSTM + VADER achieves +36.9% over the period. Simple SVMs, which lack sequential memory, remain significantly in deficit.
