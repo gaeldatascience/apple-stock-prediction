@@ -1,7 +1,7 @@
 # Apple Stock Prediction with Sentiment Analysis (AAPL)
 
 Predicting whether Apple’s closing price will go **up or down on the next trading day** by enriching classical time-series features with **investor sentiment extracted from StockTwits**.  
-The code accompanies our master-thesis *“Can Sentiment Analysis Improve the Prediction of Stock Price Direction? An Empirical Study on Apple Inc. (AAPL)”* (Université Paris-Est Créteil, 2025).
+The code accompanies our master-thesis *The Contribution of Sentiment Analysis to Stock Price Prediction: Evidence from StockTwits and Apple Inc.”* (Université Paris-Est Créteil, 2025).
 
 ---
 
@@ -91,8 +91,8 @@ If you use this work in academic research, please cite:
 
 ```bibtex
 @mastersthesis{pefourque_traore_2025,
-  title  = {Can Sentiment Analysis Improve the Prediction of Stock Price Direction?},
-  author = {Pefourque, Gaël and Traore, Djibril},
+  title  = {The Contribution of Sentiment Analysis to Stock Price Prediction: Evidence from StockTwits and Apple Inc.},
+  author = {Pefourque, Gaël},
   school = {Université Paris-Est Créteil},
   year   = {2025},
   url    = {https://github.com/gaeldatascience/apple-stock-prediction}
